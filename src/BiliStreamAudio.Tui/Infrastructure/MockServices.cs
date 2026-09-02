@@ -206,6 +206,70 @@ internal sealed class MockDanmakuConnection : IDanmakuConnection
     }
 }
 
+internal sealed class MockHistoryStore : IHistoryStore
+{
+    private readonly object _gate = new();
+    private readonly List<(long RoomId, string Message, DateTimeOffset SentAt)> _danmaku = [];
+    private readonly Dictionary<long, PlaybackHistoryEntry> _playback = [];
+
+    public void RecordDanmakuSent(long roomId, string message, DateTimeOffset sentAt)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            _danmaku.Add((roomId, message, sentAt));
+        }
+    }
+
+    public IReadOnlyList<string> GetDanmakuHistory(long? roomId, int limit = 50)
+    {
+        lock (_gate)
+        {
+            return _danmaku
+                .Where(item => roomId is null || item.RoomId == roomId)
+                .OrderByDescending(item => item.SentAt)
+                .Take(limit)
+                .Select(item => item.Message)
+                .ToList();
+        }
+    }
+
+    public void RecordPlayback(long roomId, string anchor, string title, DateTimeOffset watchedAt)
+    {
+        lock (_gate)
+        {
+            _playback[roomId] = new PlaybackHistoryEntry(roomId, anchor, title, watchedAt);
+        }
+    }
+
+    public IReadOnlyList<PlaybackHistoryEntry> GetPlaybackHistory(int limit = 100)
+    {
+        lock (_gate)
+        {
+            return _playback.Values
+                .OrderByDescending(entry => entry.WatchedAt)
+                .Take(limit)
+                .ToList();
+        }
+    }
+
+    public void DeletePlayback(long roomId)
+    {
+        lock (_gate)
+        {
+            _playback.Remove(roomId);
+        }
+    }
+
+    public void Dispose()
+    {
+    }
+}
+
 internal sealed class MockDanmakuSender(MockDanmakuConnection connection) : IDanmakuSender
 {
     public async Task SendAsync(

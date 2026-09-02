@@ -24,6 +24,7 @@ internal sealed class LiveRoomWindow : Window
     private readonly ITokenRefreshService _tokenRefresh;
     private readonly IAudioPlayer _audio;
     private readonly IDanmakuSender _sender;
+    private readonly IHistoryStore _history;
     private readonly Action _refreshStatusBar;
     private readonly GuiLabel _header;
     private readonly GuiListView _messages;
@@ -35,6 +36,9 @@ internal sealed class LiveRoomWindow : Window
     private string _sessionStatus = "已停止";
     private DateTimeOffset? _cooldownEndsAt;
     private object? _cooldownToken;
+    private List<string> _danmakuHistory = [];
+    private int _danmakuHistoryIndex = -1;
+    private string? _danmakuHistoryDraft;
 
     public LiveRoomWindow(
         IApplication app,
@@ -44,6 +48,7 @@ internal sealed class LiveRoomWindow : Window
         IAudioPlayer audio,
         IDanmakuConnection danmaku,
         IDanmakuSender sender,
+        IHistoryStore history,
         Action refreshStatusBar)
     {
         _app = app;
@@ -52,6 +57,7 @@ internal sealed class LiveRoomWindow : Window
         _tokenRefresh = tokenRefresh;
         _audio = audio;
         _sender = sender;
+        _history = history;
         _refreshStatusBar = refreshStatusBar;
 
         Title = "直播间";
@@ -100,7 +106,23 @@ internal sealed class LiveRoomWindow : Window
         }
 
         _currentRoomId = room.RoomId;
+        LoadDanmakuHistory(room.RoomId);
         RefreshHeader();
+    }
+
+    private void LoadDanmakuHistory(long roomId)
+    {
+        try
+        {
+            _danmakuHistory = _history.GetDanmakuHistory(roomId).ToList();
+        }
+        catch
+        {
+            _danmakuHistory = [];
+        }
+
+        _danmakuHistoryIndex = -1;
+        _danmakuHistoryDraft = null;
     }
 
     private void ClearDanmakuList()
@@ -186,6 +208,13 @@ internal sealed class LiveRoomWindow : Window
 
         _input.KeyDown += (_, key) =>
         {
+            if (key == Key.CursorUp || key == Key.CursorDown)
+            {
+                NavigateDanmakuHistory(key == Key.CursorUp ? -1 : 1);
+                key.Handled = true;
+                return;
+            }
+
             if (key != Key.Enter)
             {
                 return;
@@ -277,13 +306,83 @@ internal sealed class LiveRoomWindow : Window
         try
         {
             await SendDanmakuAsync(roomId, text).ConfigureAwait(false);
-            _app.Invoke(() => CompleteDanmakuSend(pending, success: true));
+            try
+            {
+                _history.RecordDanmakuSent(roomId, text, DateTimeOffset.Now);
+            }
+            catch (Exception exception)
+            {
+                Log.Warning(exception, "Failed to save danmaku history");
+            }
+
+            _app.Invoke(() =>
+            {
+                CompleteDanmakuSend(pending, success: true);
+                LoadDanmakuHistory(roomId);
+            });
         }
         catch (Exception exception)
         {
             Log.Error(exception, "Danmaku send failed");
             _app.Invoke(() => CompleteDanmakuSend(pending, success: false));
         }
+    }
+
+    /// <summary>
+    /// 使用键盘上下键在当前直播间的弹幕发送历史中切换。
+    /// 返回 true 表示已处理该按键（应阻止默认行为）。
+    /// </summary>
+    private bool NavigateDanmakuHistory(int direction)
+    {
+        if (_danmakuHistory.Count == 0)
+        {
+            return false;
+        }
+
+        var nextIndex = GetNextDanmakuHistoryIndex(
+            _danmakuHistoryIndex,
+            _danmakuHistory.Count,
+            direction);
+        if (_danmakuHistoryIndex < 0)
+        {
+            if (nextIndex < 0)
+            {
+                return false;
+            }
+
+            // 首次进入历史导航：保存当前输入，以便按 Down 回到原始内容。
+            _danmakuHistoryDraft = _input.Text.ToString() ?? string.Empty;
+        }
+
+        _danmakuHistoryIndex = nextIndex;
+        if (_danmakuHistoryIndex < 0)
+        {
+            _input.Text = _danmakuHistoryDraft ?? string.Empty;
+            RefreshInputStatus();
+            return true;
+        }
+
+        _input.Text = _danmakuHistory[_danmakuHistoryIndex];
+        _input.InsertionPoint = _input.Text.Length;
+        RefreshInputStatus();
+        return true;
+    }
+
+    internal static int GetNextDanmakuHistoryIndex(int currentIndex, int count, int direction)
+    {
+        if (count <= 0 || currentIndex < 0 && direction > 0)
+        {
+            return -1;
+        }
+
+        if (currentIndex < 0)
+        {
+            return 0;
+        }
+
+        return direction < 0
+            ? Math.Min(currentIndex + 1, count - 1)
+            : currentIndex - 1;
     }
 
     private PendingDanmaku StartDanmakuSend(string text)

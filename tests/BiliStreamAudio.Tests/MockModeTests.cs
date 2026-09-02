@@ -1,5 +1,6 @@
 using BiliStreamAudio.Tui.Core;
 using BiliStreamAudio.Tui.Infrastructure;
+using BiliStreamAudio.Tui.Views;
 
 namespace BiliStreamAudio.Tests;
 
@@ -39,6 +40,27 @@ public sealed class MockModeTests
     }
 
     [Fact]
+    public async Task Playback_continues_when_history_cannot_be_saved()
+    {
+        var audio = new MockAudioPlayer();
+        var danmaku = new MockDanmakuConnection();
+        string? latestStatus = null;
+
+        await using var session = new RoomSession(
+            new MockRoomResolver(),
+            new MockStreamResolver(),
+            audio,
+            danmaku,
+            new ThrowingHistoryStore());
+        session.StatusChanged += (_, status) => latestStatus = status;
+
+        await session.SwitchAsync(1000, CancellationToken.None);
+
+        Assert.Equal(PlaybackState.Playing, audio.State);
+        Assert.Contains("观看历史保存失败", latestStatus);
+    }
+
+    [Fact]
     public async Task Mock_danmaku_sender_fails_for_error_message()
     {
         var sender = new MockDanmakuSender(new MockDanmakuConnection());
@@ -46,6 +68,20 @@ public sealed class MockModeTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => sender.SendAsync(1000, "error", auth.Current!, CancellationToken.None));
+    }
+
+    [Fact]
+    public void Danmaku_history_navigation_moves_older_with_up_and_returns_to_draft_with_down()
+    {
+        var newest = LiveRoomWindow.GetNextDanmakuHistoryIndex(-1, count: 3, direction: -1);
+        var older = LiveRoomWindow.GetNextDanmakuHistoryIndex(newest, count: 3, direction: -1);
+        var newestAgain = LiveRoomWindow.GetNextDanmakuHistoryIndex(older, count: 3, direction: 1);
+        var draft = LiveRoomWindow.GetNextDanmakuHistoryIndex(newestAgain, count: 3, direction: 1);
+
+        Assert.Equal(0, newest);
+        Assert.Equal(1, older);
+        Assert.Equal(0, newestAgain);
+        Assert.Equal(-1, draft);
     }
 
     [Fact]
@@ -61,5 +97,27 @@ public sealed class MockModeTests
         Assert.Contains(searched, item => item.IsLive && item.RoomId > 0);
         Assert.Contains(searched, item => !item.IsLive && item.RoomId == 0);
         Assert.Empty(await directory.SearchUsersAsync("empty", CancellationToken.None));
+    }
+
+    private sealed class ThrowingHistoryStore : IHistoryStore
+    {
+        public void RecordDanmakuSent(long roomId, string message, DateTimeOffset sentAt)
+        {
+        }
+
+        public IReadOnlyList<string> GetDanmakuHistory(long? roomId, int limit = 50) => [];
+
+        public void RecordPlayback(long roomId, string anchor, string title, DateTimeOffset watchedAt) =>
+            throw new IOException("磁盘不可写");
+
+        public IReadOnlyList<PlaybackHistoryEntry> GetPlaybackHistory(int limit = 100) => [];
+
+        public void DeletePlayback(long roomId)
+        {
+        }
+
+        public void Dispose()
+        {
+        }
     }
 }

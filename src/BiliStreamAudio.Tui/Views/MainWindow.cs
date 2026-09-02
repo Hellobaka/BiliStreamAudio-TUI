@@ -24,6 +24,7 @@ internal sealed class MainWindow : Window
         IAudioPlayer audio,
         IDanmakuConnection danmaku,
         IDanmakuSender sender,
+        IHistoryStore history,
         bool mockMode)
     {
         Title = mockMode ? "BiliStreamAudio-TUI（模拟模式）" : "BiliStreamAudio-TUI";
@@ -49,6 +50,7 @@ internal sealed class MainWindow : Window
             audio,
             danmaku,
             sender,
+            history,
             RefreshStatusBar);
         _tabs = new Tabs
         {
@@ -58,11 +60,19 @@ internal sealed class MainWindow : Window
             Height = Dim.Fill(1)
         };
         Browse = new BrowseWindow(app, directory, rooms, session, ShowLiveRoom);
+        var playbackHistory = new PlaybackHistoryWindow(app, history, rooms, session, ShowLiveRoom);
         _tabs.Add(
             LiveRoom,
             Browse,
-            new PlaceholderWindow("观看历史", "观看历史将在这里显示。"),
+            playbackHistory,
             new PlaceholderWindow("设置", "应用设置将在这里配置。"));
+        _tabs.ValueChanged += (_, args) =>
+        {
+            if (ReferenceEquals(args.NewValue, playbackHistory))
+            {
+                playbackHistory.Load();
+            }
+        };
         _tabs.Value = LiveRoom;
         audio.StateChanged += (_, _) => app.Invoke(RefreshStatusBar);
         RefreshStatusBar();

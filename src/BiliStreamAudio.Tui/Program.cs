@@ -51,6 +51,7 @@ internal static class Program
         IAudioPlayer audio;
         IDanmakuConnection danmaku;
         IDanmakuSender sender;
+        IHistoryStore history;
         BiliHttp? http = null;
 
         if (mockMode)
@@ -64,6 +65,7 @@ internal static class Program
             var mockDanmaku = new MockDanmakuConnection();
             danmaku = mockDanmaku;
             sender = new MockDanmakuSender(mockDanmaku);
+            history = new MockHistoryStore();
         }
         else
         {
@@ -78,12 +80,13 @@ internal static class Program
             audio = new AudioPlayer();
             danmaku = new DanmakuConnection(() => auth.Current);
             sender = new DanmakuSender();
+            history = new HistoryStore();
         }
 
         using IApplication app = GuiApplication.Create();
         app.Init();
 
-        var session = new RoomSession(rooms, streams, audio, danmaku);
+        var session = new RoomSession(rooms, streams, audio, danmaku, history);
         var mainWindow = new MainWindow(
             app,
             session,
@@ -94,6 +97,7 @@ internal static class Program
             audio,
             danmaku,
             sender,
+            history,
             mockMode);
 
         app.Keyboard.KeyDown += (_, key) =>
@@ -129,6 +133,7 @@ internal static class Program
         app.Run(mainWindow);
 
         session.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        history.Dispose();
         http?.Dispose();
     }
 

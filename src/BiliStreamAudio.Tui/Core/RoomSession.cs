@@ -6,6 +6,7 @@ public sealed class RoomSession : IAsyncDisposable
     private readonly IStreamResolver _streams;
     private readonly IAudioPlayer _audio;
     private readonly IDanmakuConnection _danmaku;
+    private readonly IHistoryStore? _history;
     private CancellationTokenSource? _sessionLifetime;
 
     public LiveRoom? Room
@@ -20,12 +21,14 @@ public sealed class RoomSession : IAsyncDisposable
         IRoomResolver rooms,
         IStreamResolver streams,
         IAudioPlayer audio,
-        IDanmakuConnection danmaku)
+        IDanmakuConnection danmaku,
+        IHistoryStore? history = null)
     {
         _rooms = rooms;
         _streams = streams;
         _audio = audio;
         _danmaku = danmaku;
+        _history = history;
     }
 
     public async Task SwitchAsync(long roomId, CancellationToken cancellationToken)
@@ -53,7 +56,17 @@ public sealed class RoomSession : IAsyncDisposable
         var stream = candidates.FirstOrDefault() ?? throw new InvalidOperationException("没有可用的音频流。");
         await _audio.PlayAsync(stream, token).ConfigureAwait(false);
         await _danmaku.ConnectAsync(room, token).ConfigureAwait(false);
-        StatusChanged?.Invoke(this, $"已启动 {stream.Protocol}/{stream.Format}，等待音频输出…");
+        var historyWarning = string.Empty;
+        try
+        {
+            _history?.RecordPlayback(room.RoomId, room.Anchor, room.Title, DateTimeOffset.Now);
+        }
+        catch (Exception exception)
+        {
+            historyWarning = $"（观看历史保存失败：{exception.ToDisplayText()}）";
+        }
+
+        StatusChanged?.Invoke(this, $"已启动 {stream.Protocol}/{stream.Format}，等待音频输出…{historyWarning}");
     }
     public async Task RefreshAsync(CancellationToken cancellationToken)
     {

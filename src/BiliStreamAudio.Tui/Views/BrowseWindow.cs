@@ -43,18 +43,38 @@ internal sealed class BrowseWindow : Window
 internal abstract class LiveListWindow : Window
 {
     private static readonly string[] LoadingFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    private readonly IApplication _app;
+    protected readonly IApplication _app;
     private readonly RoomSession _session;
     private readonly Action _showLiveRoom;
     private readonly GuiView _cards;
     private readonly GuiLabel _message;
+    private readonly bool _showDeleteButton;
+    private readonly string _dateColumnHeader;
     private CancellationTokenSource? _loadingAnimation;
 
-    protected LiveListWindow(IApplication app, RoomSession session, Action showLiveRoom)
+    /// <summary>点击“删除”按钮时回调，由子类实现确认与删除逻辑。</summary>
+    protected virtual void OnDelete(LiveDirectoryEntry entry)
+    {
+    }
+
+    protected LiveListWindow(
+        IApplication app,
+        RoomSession session,
+        Action showLiveRoom,
+        bool showHeader = false,
+        bool showDeleteButton = false,
+        string dateColumnHeader = "开播时间")
     {
         _app = app;
         _session = session;
         _showLiveRoom = showLiveRoom;
+        _showDeleteButton = showDeleteButton;
+        _dateColumnHeader = dateColumnHeader;
+        if (showHeader)
+        {
+            AddHeader();
+        }
+
         _message = new GuiLabel
         {
             X = 1,
@@ -70,6 +90,56 @@ internal abstract class LiveListWindow : Window
             Height = Dim.Fill(3)
         };
         Add(_message, _cards);
+    }
+
+    private void AddHeader()
+    {
+        var header = new GuiView
+        {
+            X = 1,
+            Y = 1,
+            Width = Dim.Fill(2),
+            Height = 1
+        };
+        var bold = new Scheme(new GuiAttribute(GuiColor.White, GuiColor.None, TextStyle.Bold));
+        var anchorHeader = new GuiLabel
+        {
+            Text = "主播",
+            X = 1,
+            Y = 0,
+            Width = 28,
+            HotKeySpecifier = new Rune(0xffff)
+        };
+        var titleHeader = new GuiLabel
+        {
+            Text = "标题",
+            X = 30,
+            Y = 0,
+            Width = 20,
+            HotKeySpecifier = new Rune(0xffff)
+        };
+        var dateHeader = new GuiLabel
+        {
+            Text = _dateColumnHeader,
+            X = _showDeleteButton ? Pos.AnchorEnd(56) : Pos.AnchorEnd(40),
+            Y = 0,
+            Width = 22,
+            HotKeySpecifier = new Rune(0xffff)
+        };
+        var actionHeader = new GuiLabel
+        {
+            Text = "操作",
+            X = _showDeleteButton ? Pos.AnchorEnd(32) : Pos.AnchorEnd(14),
+            Y = 0,
+            Width = 24,
+            HotKeySpecifier = new Rune(0xffff)
+        };
+        anchorHeader.SetScheme(bold);
+        titleHeader.SetScheme(bold);
+        dateHeader.SetScheme(bold);
+        actionHeader.SetScheme(bold);
+        header.Add(anchorHeader, titleHeader, dateHeader, actionHeader);
+        Add(header);
     }
 
     protected void ShowEntries(
@@ -129,10 +199,10 @@ internal abstract class LiveListWindow : Window
             GuiColor.None,
             TextStyle.Bold)));
         title.SetScheme(new Scheme(new GuiAttribute(GuiColor.White, GuiColor.None, TextStyle.Bold)));
-        var started = new GuiLabel
+        var date = new GuiLabel
         {
-            Text = entry.StartedAt is { } time ? time.ToString("G") : string.Empty,
-            X = Pos.AnchorEnd(40),
+            Text = (entry.WatchedAt ?? entry.StartedAt) is { } time ? time.ToString("G") : string.Empty,
+            X = _showDeleteButton ? Pos.AnchorEnd(56) : Pos.AnchorEnd(40),
             Y = 0,
             Width = 22,
             HotKeySpecifier = new Rune(0xffff)
@@ -140,14 +210,32 @@ internal abstract class LiveListWindow : Window
         var play = new GuiButton
         {
             Text = "▶️ 播放",
-            X = Pos.AnchorEnd(14),
+            X = _showDeleteButton ? Pos.AnchorEnd(32) : Pos.AnchorEnd(14),
             Y = 0,
             Width = 12,
             HotKeySpecifier = new Rune(0xffff),
             Enabled = (entry.IsLive || entry.IsDirectRoomEntry) && entry.RoomId > 0
         };
         play.Accepted += (_, _) => Play(entry);
-        card.Add(name, title, started, play);
+        if (_showDeleteButton)
+        {
+            var delete = new GuiButton
+            {
+                Text = "🗑 删除",
+                X = Pos.AnchorEnd(14),
+                Y = 0,
+                Width = 12,
+                HotKeySpecifier = new Rune(0xffff),
+                Enabled = entry.RoomId > 0
+            };
+            delete.Accepted += (_, _) => OnDelete(entry);
+            card.Add(name, title, date, play, delete);
+        }
+        else
+        {
+            card.Add(name, title, date, play);
+        }
+
         _cards.Add(card);
     }
 
@@ -368,5 +456,128 @@ internal sealed class SearchLiveWindow : LiveListWindow
             // Keep the search result usable when one room's detail request fails.
             return entry;
         }
+    }
+}
+
+internal sealed class PlaybackHistoryWindow : LiveListWindow
+{
+    private const int MaximumConcurrentStatusRequests = 4;
+
+    private readonly IHistoryStore _history;
+    private readonly IRoomResolver _rooms;
+    private readonly SemaphoreSlim _statusRequestGate = new(MaximumConcurrentStatusRequests);
+    private int _loadVersion;
+
+    public PlaybackHistoryWindow(
+        IApplication app,
+        IHistoryStore history,
+        IRoomResolver rooms,
+        RoomSession session,
+        Action showLiveRoom)
+        : base(app, session, showLiveRoom, showHeader: true, showDeleteButton: true, dateColumnHeader: "上次观看")
+    {
+        Title = "观看历史";
+        _history = history;
+        _rooms = rooms;
+        KeyDown += (_, key) =>
+        {
+            if (key == Key.R || key == Key.R.WithShift)
+            {
+                Load();
+                key.Handled = true;
+            }
+        };
+    }
+
+    public void Load()
+    {
+        var loadVersion = Interlocked.Increment(ref _loadVersion);
+        _ = RunUiTaskAsync(async () =>
+        {
+            var records = _history.GetPlaybackHistory();
+            var entries = records
+                .Select(record => new LiveDirectoryEntry(
+                    record.RoomId,
+                    0,
+                    record.Anchor,
+                    record.Title,
+                    false,
+                    null,
+                    true,
+                    record.WatchedAt))
+                .ToList();
+            var enriched = await Task.WhenAll(entries.Select(RefreshLiveStatusAsync)).ConfigureAwait(false);
+            Invoke(() =>
+            {
+                if (loadVersion != Volatile.Read(ref _loadVersion))
+                {
+                    return;
+                }
+
+                ShowEntries(
+                    enriched,
+                    "还没有观看历史。播放任意直播间后会在这里显示。",
+                    $"共 {enriched.Length} 条观看历史");
+            });
+        }, error =>
+        {
+            if (loadVersion == Volatile.Read(ref _loadVersion))
+            {
+                ShowError(error);
+            }
+        });
+    }
+
+    private async Task<LiveDirectoryEntry> RefreshLiveStatusAsync(LiveDirectoryEntry entry)
+    {
+        if (entry.RoomId <= 0)
+        {
+            return entry;
+        }
+
+        try
+        {
+            await _statusRequestGate.WaitAsync().ConfigureAwait(false);
+            var room = await _rooms
+                .ResolveAsync(new RoomReference(entry.RoomId), CancellationToken.None)
+                .ConfigureAwait(false);
+            return entry with
+            {
+                RoomId = room.RoomId,
+                Title = room.Title,
+                IsLive = room.IsLive,
+                IsDirectRoomEntry = false
+            };
+        }
+        catch
+        {
+            // Keep the history entry usable when one room's detail request fails.
+            return entry;
+        }
+        finally
+        {
+            _statusRequestGate.Release();
+        }
+    }
+
+    protected override void OnDelete(LiveDirectoryEntry entry)
+    {
+        if (entry.RoomId <= 0)
+        {
+            return;
+        }
+
+        var choice = Terminal.Gui.Views.MessageBox.Query(
+            _app,
+            "删除观看历史",
+            $"确定要删除「{entry.Anchor}」的观看历史吗？",
+            ["删除", "取消"]);
+        if (choice != 0)
+        {
+            return;
+        }
+
+        _history.DeletePlayback(entry.RoomId);
+        Load();
     }
 }

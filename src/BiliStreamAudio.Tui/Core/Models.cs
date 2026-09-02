@@ -21,7 +21,8 @@ public sealed record LiveDirectoryEntry(
     string Title,
     bool IsLive,
     DateTimeOffset? StartedAt,
-    bool IsDirectRoomEntry = false);
+    bool IsDirectRoomEntry = false,
+    DateTimeOffset? WatchedAt = null);
 
 public sealed record StreamDescriptor(
     Uri Url,
@@ -98,6 +99,15 @@ public static class ExceptionExtensions
         character is >= '\u3400' and <= '\u4dbf'
         or >= '\u4e00' and <= '\u9fff');
 }
+
+/// <summary>
+/// 一条直播间播放历史记录。每个直播间只保留最近一次观看的记录。
+/// </summary>
+public sealed record PlaybackHistoryEntry(
+    long RoomId,
+    string Anchor,
+    string Title,
+    DateTimeOffset WatchedAt);
 
 public sealed record DanmakuServer(string Host, int WsPort, int WssPort, string Token);
 
