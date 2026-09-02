@@ -22,6 +22,7 @@ public sealed class AudioPlayer : IAudioPlayer
             "--no-video",
             "--intf=dummy",
             "--no-osd",
+            "--quiet",
             "--verbose=2",
             $"--http-user-agent={BiliHttp.DesktopBrowserUserAgent}",
             $"--http-referrer={LiveReferrer}",
@@ -85,15 +86,18 @@ public sealed class AudioPlayer : IAudioPlayer
     private static void OnVlcLog(object? sender, LogEventArgs args)
     {
         var message = VlcLogSanitizer.Sanitize(args.Message);
-        if (args.Level is LogLevel.Warning or LogLevel.Error
-            || message.Contains("HTTP/", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("forbidden", StringComparison.OrdinalIgnoreCase))
+        switch (args.Level)
         {
-            Log.Information(
-                "LibVLC [{Level}] [{Module}] {Message}",
-                args.Level,
-                args.Module,
-                message);
+            // LibVLC calls its informational level "Notice".
+            case LogLevel.Notice:
+                Log.Information("LibVLC [{Module}] {Message}", args.Module, message);
+                break;
+            case LogLevel.Warning:
+                Log.Warning("LibVLC [{Module}] {Message}", args.Module, message);
+                break;
+            case LogLevel.Error:
+                Log.Error("LibVLC [{Module}] {Message}", args.Module, message);
+                break;
         }
     }
 
