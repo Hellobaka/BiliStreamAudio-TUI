@@ -1,3 +1,4 @@
+using System.Text;
 using BiliStreamAudio.Tui.Core;
 
 namespace BiliStreamAudio.Tui.Infrastructure;
@@ -207,7 +208,7 @@ internal sealed class MockDanmakuConnection : IDanmakuConnection
 
 internal sealed class MockDanmakuSender(MockDanmakuConnection connection) : IDanmakuSender
 {
-    public Task SendAsync(
+    public async Task SendAsync(
         long roomId,
         string message,
         AuthSession session,
@@ -219,12 +220,17 @@ internal sealed class MockDanmakuSender(MockDanmakuConnection connection) : IDan
             throw new InvalidOperationException("请先登录。");
         }
 
-        if (string.IsNullOrWhiteSpace(message) || message.Length > 20)
+        if (string.IsNullOrWhiteSpace(message) || message.EnumerateRunes().Count() > 30)
         {
-            throw new ArgumentException("弹幕长度须为 1–20 个字符。", nameof(message));
+            throw new ArgumentException("弹幕长度须为 1–30 个字符。", nameof(message));
+        }
+
+        await Task.Delay(Random.Shared.Next(400, 1201), cancellationToken).ConfigureAwait(false);
+        if (string.Equals(message, "error", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("模拟发送失败。");
         }
 
         connection.Publish(session.UserName ?? "Mock 用户", message);
-        return Task.CompletedTask;
     }
 }

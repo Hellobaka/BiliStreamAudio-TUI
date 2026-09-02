@@ -40,6 +40,16 @@ public sealed class MockModeTests
     }
 
     [Fact]
+    public async Task Mock_danmaku_sender_fails_for_error_message()
+    {
+        var sender = new MockDanmakuSender(new MockDanmakuConnection());
+        var auth = new MockAuthService();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sender.SendAsync(1000, "error", auth.Current!, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Mock_live_directory_has_playable_and_offline_cards()
     {
         var directory = new MockLiveDirectoryService();

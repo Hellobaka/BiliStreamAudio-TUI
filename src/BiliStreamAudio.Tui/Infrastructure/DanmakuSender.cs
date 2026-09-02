@@ -1,10 +1,12 @@
 using BiliStreamAudio.Tui.Core;
 
+using System.Text;
+
 namespace BiliStreamAudio.Tui.Infrastructure;
 
 public sealed class DanmakuSender(Func<AuthSession, BiliHttp>? httpFactory = null) : IDanmakuSender
 {
-    private const int MaximumMessageLength = 20;
+    private const int MaximumMessageLength = 30;
     private const int MaximumMessagesPerWindow = 5;
     private static readonly TimeSpan RateLimitWindow = TimeSpan.FromSeconds(30);
 
@@ -18,9 +20,9 @@ public sealed class DanmakuSender(Func<AuthSession, BiliHttp>? httpFactory = nul
             throw new InvalidOperationException("请先登录。");
         }
 
-        if (string.IsNullOrWhiteSpace(message) || message.Length > MaximumMessageLength)
+        if (string.IsNullOrWhiteSpace(message) || message.EnumerateRunes().Count() > MaximumMessageLength)
         {
-            throw new ArgumentException("弹幕长度须为 1–20 个字符。", nameof(message));
+            throw new ArgumentException("弹幕长度须为 1–30 个字符。", nameof(message));
         }
 
         var now = DateTimeOffset.UtcNow;

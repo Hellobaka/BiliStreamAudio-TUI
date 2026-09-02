@@ -14,6 +14,8 @@ namespace BiliStreamAudio.Tui.Views;
 internal sealed class LiveRoomWindow : Window
 {
     private const int MaximumMessageCount = 500;
+    private const int MaximumDanmakuLength = 30;
+    private const int SendCooldownSeconds = 3;
     private const string DanmakuInputUnavailableText = "请先在“浏览”页面选择直播间并登录，然后发送弹幕。";
 
     private readonly IApplication _app;
@@ -26,8 +28,12 @@ internal sealed class LiveRoomWindow : Window
     private readonly GuiLabel _header;
     private readonly GuiListView _messages;
     private readonly TextField _input;
-    private readonly ObservableCollection<string> _messageItems = [];
+    private readonly GuiLabel _inputStatus;
+    private readonly ObservableCollection<DanmakuListItem> _messageItems = [];
+    private readonly List<PendingDanmaku> _pendingDanmaku = [];
     private string _sessionStatus = "已停止";
+    private DateTimeOffset? _cooldownEndsAt;
+    private object? _cooldownToken;
 
     public LiveRoomWindow(
         IApplication app,
@@ -71,7 +77,13 @@ internal sealed class LiveRoomWindow : Window
             Y = Pos.AnchorEnd(2),
             Width = Dim.Fill(2)
         };
-        Add(_header, _messages, _input);
+        _inputStatus = new GuiLabel
+        {
+            X = 1,
+            Y = Pos.AnchorEnd(1),
+            Width = Dim.Fill(2)
+        };
+        Add(_header, _messages, _input, _inputStatus);
         ConfigureEvents(danmaku);
         RefreshHeader();
     }
@@ -90,16 +102,7 @@ internal sealed class LiveRoomWindow : Window
 
     public void AddMessage(string value)
     {
-        _app.Invoke(() =>
-        {
-            _messageItems.Add(value);
-            while (_messageItems.Count > MaximumMessageCount)
-            {
-                _messageItems.RemoveAt(0);
-            }
-
-            _messages.MoveEnd(extend: false);
-        });
+        _app.Invoke(() => AddMessageItem(value));
     }
 
     internal static async Task RunUiTask(
@@ -121,8 +124,13 @@ internal sealed class LiveRoomWindow : Window
 
     private void ConfigureEvents(IDanmakuConnection danmaku)
     {
-        danmaku.Received += (_, item) =>
-            AddMessage($"[{item.ReceivedAt:HH:mm:ss}] {item.UserName}: {item.Message}");
+        danmaku.Received += (_, item) => _app.Invoke(() =>
+        {
+            if (!TryConfirmDanmaku(item))
+            {
+                AddMessageItem(FormatDanmaku(item.ReceivedAt, item.UserName, item.Message));
+            }
+        });
         danmaku.StatusChanged += (_, status) => _app.Invoke(() =>
         {
             _sessionStatus = status;
@@ -134,6 +142,18 @@ internal sealed class LiveRoomWindow : Window
             _sessionStatus = status;
             RefreshHeader();
         });
+        _input.TextChanging += (_, args) =>
+        {
+            var proposedText = args.Result ?? string.Empty;
+            if (CountDanmakuCharacters(proposedText) <= MaximumDanmakuLength)
+            {
+                return;
+            }
+
+            args.Result = TruncateDanmaku(proposedText);
+            args.Handled = true;
+        };
+        _input.TextChanged += (_, _) => RefreshInputStatus();
 
         _input.KeyDown += (_, key) =>
         {
@@ -142,14 +162,15 @@ internal sealed class LiveRoomWindow : Window
                 return;
             }
 
-            var value = _input.Text.ToString() ?? string.Empty;
-            _input.Text = string.Empty;
-
-            if (_session.Room is { } room && _auth.Current?.IsAuthenticated == true)
+            if (_session.Room is { } room
+                && _auth.Current?.IsAuthenticated == true)
             {
-                _ = RunUiTask(
-                    () => SendDanmakuAsync(room.RoomId, value),
-                    AddMessage);
+                var value = _input.Text.ToString() ?? string.Empty;
+                _input.Text = string.Empty;
+                _input.HasFocus = true;
+                StartSendCooldown();
+                var pending = StartDanmakuSend(value);
+                _ = SendDanmakuWithFeedbackAsync(room.RoomId, value, pending);
             }
             else
             {
@@ -222,13 +243,240 @@ internal sealed class LiveRoomWindow : Window
         await _sender.SendAsync(roomId, text, result.Session, CancellationToken.None).ConfigureAwait(false);
     }
 
+    private async Task SendDanmakuWithFeedbackAsync(long roomId, string text, PendingDanmaku pending)
+    {
+        try
+        {
+            await SendDanmakuAsync(roomId, text).ConfigureAwait(false);
+            _app.Invoke(() => CompleteDanmakuSend(pending, success: true));
+        }
+        catch (Exception exception)
+        {
+            Log.Error(exception, "Danmaku send failed");
+            _app.Invoke(() => CompleteDanmakuSend(pending, success: false));
+        }
+    }
+
+    private PendingDanmaku StartDanmakuSend(string text)
+    {
+        var pending = new PendingDanmaku(
+            Guid.NewGuid(),
+            text,
+            _auth.Current?.UserName ?? "我",
+            DateTimeOffset.Now);
+        _pendingDanmaku.Add(pending);
+        UpdateMessageItem(pending.Id, $"{FormatDanmaku(pending.SentAt, pending.UserName, text)} 发送中 {SendingFrames[0]}", addIfMissing: true);
+        pending.AnimationToken = _app.AddTimeout(TimeSpan.FromMilliseconds(100), () =>
+        {
+            pending.FrameIndex = (pending.FrameIndex + 1) % SendingFrames.Length;
+            UpdateMessageItem(
+                pending.Id,
+                $"{FormatDanmaku(pending.SentAt, pending.UserName, text)} 发送中 {SendingFrames[pending.FrameIndex]}");
+            return true;
+        });
+        pending.ConfirmationExpiryToken = _app.AddTimeout(TimeSpan.FromSeconds(5), () =>
+        {
+            _pendingDanmaku.Remove(pending);
+            return false;
+        });
+        return pending;
+    }
+
+    private void CompleteDanmakuSend(PendingDanmaku pending, bool success)
+    {
+        if (pending.IsConfirmed)
+        {
+            return;
+        }
+
+        StopDanmakuAnimation(pending);
+        if (!success)
+        {
+            _pendingDanmaku.Remove(pending);
+            if (pending.ConfirmationExpiryToken is { } expiryToken)
+            {
+                _app.RemoveTimeout(expiryToken);
+            }
+        }
+
+        UpdateMessageItem(
+            pending.Id,
+            success
+                ? FormatDanmaku(pending.SentAt, pending.UserName, pending.Text)
+                : $"{FormatDanmaku(pending.SentAt, pending.UserName, pending.Text)} ❌ 发送失败");
+    }
+
+    private bool TryConfirmDanmaku(DanmakuEvent item)
+    {
+        var pending = _pendingDanmaku.FirstOrDefault(candidate =>
+        {
+            var elapsed = item.ReceivedAt - candidate.SentAt;
+            return string.Equals(candidate.UserName, item.UserName, StringComparison.Ordinal)
+                && string.Equals(candidate.Text, item.Message, StringComparison.Ordinal)
+                && elapsed >= TimeSpan.Zero
+                && elapsed <= TimeSpan.FromSeconds(5);
+        });
+        if (pending is null)
+        {
+            return false;
+        }
+
+        pending.IsConfirmed = true;
+        StopDanmakuAnimation(pending);
+        if (pending.ConfirmationExpiryToken is { } expiryToken)
+        {
+            _app.RemoveTimeout(expiryToken);
+        }
+
+        _pendingDanmaku.Remove(pending);
+        UpdateMessageItem(pending.Id, FormatDanmaku(item.ReceivedAt, item.UserName, item.Message));
+        return true;
+    }
+
+    private void StopDanmakuAnimation(PendingDanmaku pending)
+    {
+        if (pending.AnimationToken is { } token)
+        {
+            _app.RemoveTimeout(token);
+            pending.AnimationToken = null;
+        }
+    }
+
     private void RefreshDanmakuInput()
     {
-        var isAvailable = _session.Room is not null && _auth.Current?.IsAuthenticated == true;
-        _input.Enabled = isAvailable;
-        _input.Text = isAvailable ? string.Empty : DanmakuInputUnavailableText;
+        var canSendDanmaku = _session.Room is not null && _auth.Current?.IsAuthenticated == true;
+        _input.Enabled = canSendDanmaku && !IsSendCooldownActive;
+        if (!canSendDanmaku)
+        {
+            _input.Text = DanmakuInputUnavailableText;
+        }
+        else if (_input.Text.ToString() == DanmakuInputUnavailableText)
+        {
+            _input.Text = string.Empty;
+        }
+
         _input.SetNeedsDraw();
+        RefreshInputStatus();
     }
+
+    private void StartSendCooldown()
+    {
+        _cooldownEndsAt = DateTimeOffset.UtcNow.AddSeconds(SendCooldownSeconds);
+        if (_cooldownToken is { } token)
+        {
+            _app.RemoveTimeout(token);
+        }
+
+        _cooldownToken = _app.AddTimeout(TimeSpan.FromMilliseconds(100), () =>
+        {
+            if (IsSendCooldownActive)
+            {
+                RefreshInputStatus();
+                return true;
+            }
+
+            _cooldownEndsAt = null;
+            _cooldownToken = null;
+            RefreshDanmakuInput();
+            if (_input.Enabled)
+            {
+                _input.HasFocus = true;
+            }
+
+            return false;
+        });
+        RefreshDanmakuInput();
+    }
+
+    private bool IsSendCooldownActive => _cooldownEndsAt is { } endsAt && endsAt > DateTimeOffset.UtcNow;
+
+    private void RefreshInputStatus()
+    {
+        if (IsSendCooldownActive && _cooldownEndsAt is { } endsAt)
+        {
+            var remainingSeconds = Math.Max(
+                1,
+                (int)Math.Ceiling((endsAt - DateTimeOffset.UtcNow).TotalSeconds));
+            _inputStatus.Text = $"发送冷却中：{remainingSeconds} 秒";
+        }
+        else if (_session.Room is not null && _auth.Current?.IsAuthenticated == true)
+        {
+            _inputStatus.Text = $"{CountDanmakuCharacters(_input.Text.ToString() ?? string.Empty)}/{MaximumDanmakuLength}";
+        }
+        else
+        {
+            _inputStatus.Text = string.Empty;
+        }
+
+        _inputStatus.SetNeedsDraw();
+    }
+
+    private static int CountDanmakuCharacters(string text) => text.EnumerateRunes().Count();
+
+    private static string TruncateDanmaku(string text)
+    {
+        var result = new StringBuilder();
+        foreach (var rune in text.EnumerateRunes().Take(MaximumDanmakuLength))
+        {
+            result.Append(rune);
+        }
+
+        return result.ToString();
+    }
+
+    private void AddMessageItem(string text) => UpdateMessageItem(Guid.NewGuid(), text, addIfMissing: true);
+
+    private void UpdateMessageItem(Guid id, string text, bool addIfMissing = false)
+    {
+        for (var index = 0; index < _messageItems.Count; index++)
+        {
+            if (_messageItems[index].Id != id)
+            {
+                continue;
+            }
+
+            _messageItems[index] = new DanmakuListItem(id, text);
+            _messages.SetNeedsDraw();
+            return;
+        }
+
+        if (!addIfMissing)
+        {
+            return;
+        }
+
+        _messageItems.Add(new DanmakuListItem(id, text));
+        while (_messageItems.Count > MaximumMessageCount)
+        {
+            _messageItems.RemoveAt(0);
+        }
+
+        _messages.MoveEnd(extend: false);
+    }
+
+    private static string FormatDanmaku(DateTimeOffset receivedAt, string userName, string message) =>
+        $"[{receivedAt:HH:mm:ss}] {userName}: {message}";
+
+    private sealed class DanmakuListItem(Guid id, string text)
+    {
+        public Guid Id { get; } = id;
+
+        public override string ToString() => text;
+    }
+
+    private sealed class PendingDanmaku(Guid id, string text, string userName, DateTimeOffset sentAt)
+    {
+        public Guid Id { get; } = id;
+        public string Text { get; } = text;
+        public string UserName { get; } = userName;
+        public DateTimeOffset SentAt { get; } = sentAt;
+        public int FrameIndex { get; set; }
+        public object? AnimationToken { get; set; }
+        public object? ConfirmationExpiryToken { get; set; }
+        public bool IsConfirmed { get; set; }
+    }
+
+    private static readonly string[] SendingFrames = ["|", "/", "-", "\\"];
 
     private static string CreateLoginStatus(AuthSession? session)
     {

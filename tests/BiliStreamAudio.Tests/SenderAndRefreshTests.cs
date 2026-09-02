@@ -38,6 +38,20 @@ public sealed class SenderAndRefreshTests
     }
 
     [Fact]
+    public async Task Sender_accepts_thirty_characters_and_rejects_the_thirty_first()
+    {
+        var handler = new JsonHandler("{\"code\":0,\"data\":{}}");
+        var sender = new DanmakuSender(session => new BiliHttp(session, handler));
+        var auth = Session();
+
+        await sender.SendAsync(1, new string('弹', 30), auth, CancellationToken.None);
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => sender.SendAsync(1, new string('弹', 31), auth, CancellationToken.None));
+
+        Assert.Equal(1, handler.Requests);
+    }
+
+    [Fact]
     public async Task Refresh_check_without_rotation_updates_daily_marker()
     {
         var directory = Path.Combine(Path.GetTempPath(), "BiliStreamAudio.Tests", Guid.NewGuid().ToString("N"));
