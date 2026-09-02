@@ -67,7 +67,8 @@ internal sealed class LiveRoomWindow : Window
             X = 1,
             Y = 2,
             Width = Dim.Fill(2),
-            Height = Dim.Fill(4)
+            Height = Dim.Fill(4),
+            ViewportSettings = ViewportSettingsFlags.HasVerticalScrollBar
         };
         _messages.SetSource(_messageItems);
         _input = new TextField
