@@ -110,8 +110,7 @@ public sealed class StreamResolver(BiliHttp http) : IStreamResolver
                 }
             }
         }
-        // 实测中码率（画质）对启动延迟的影响远大于协议/格式：2 Mbps 的 TS 流
-        // （约 3.5s）远快于 8 Mbps 的 FLV 流（约 16.7s）。因此优先选最低画质，
+        // 实测中码率（画质）对启动延迟的影响远大于协议/格式。因此优先选最低画质，
         // 同画质下再按低延迟顺序（FLV → fMP4 → TS）选择。
         return (onlyAudio
                 ? result.Where(stream => stream.IsAudioOnly)
