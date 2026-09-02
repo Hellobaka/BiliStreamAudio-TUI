@@ -10,6 +10,19 @@ public sealed record LiveRoom(
     string Anchor,
     bool IsLive);
 
+/// <summary>
+/// A live-room entry displayed in the browse page.  A room id can be zero for
+/// an offline user returned from a user-name search.
+/// </summary>
+public sealed record LiveDirectoryEntry(
+    long RoomId,
+    long Uid,
+    string Anchor,
+    string Title,
+    bool IsLive,
+    DateTimeOffset? StartedAt,
+    bool IsDirectRoomEntry = false);
+
 public sealed record StreamDescriptor(
     Uri Url,
     string Protocol,

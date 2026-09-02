@@ -38,4 +38,19 @@ public sealed class MockModeTests
         Assert.Equal("模拟直播间 1000", session.Room?.Title);
         Assert.Contains(received, item => item.Message == "测试弹幕");
     }
+
+    [Fact]
+    public async Task Mock_live_directory_has_playable_and_offline_cards()
+    {
+        var directory = new MockLiveDirectoryService();
+
+        var followed = await directory.GetFollowedLiveAsync(CancellationToken.None);
+        var searched = await directory.SearchUsersAsync("绮梦", CancellationToken.None);
+
+        Assert.NotEmpty(followed);
+        Assert.All(followed, item => Assert.True(item.IsLive));
+        Assert.Contains(searched, item => item.IsLive && item.RoomId > 0);
+        Assert.Contains(searched, item => !item.IsLive && item.RoomId == 0);
+        Assert.Empty(await directory.SearchUsersAsync("empty", CancellationToken.None));
+    }
 }

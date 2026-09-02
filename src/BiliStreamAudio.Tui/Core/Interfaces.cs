@@ -13,6 +13,16 @@ public interface IStreamResolver
         CancellationToken cancellationToken);
 }
 
+public interface ILiveDirectoryService
+{
+    Task<IReadOnlyList<LiveDirectoryEntry>> GetFollowedLiveAsync(
+        CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<LiveDirectoryEntry>> SearchUsersAsync(
+        string keyword,
+        CancellationToken cancellationToken);
+}
+
 public interface IAuthService
 {
     AuthSession? Current

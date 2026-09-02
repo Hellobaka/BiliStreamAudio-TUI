@@ -19,6 +19,8 @@ internal sealed class MainWindow : Window
         RoomSession session,
         IAuthService auth,
         ITokenRefreshService tokenRefresh,
+        IRoomResolver rooms,
+        ILiveDirectoryService directory,
         IAudioPlayer audio,
         IDanmakuConnection danmaku,
         IDanmakuSender sender,
@@ -55,9 +57,10 @@ internal sealed class MainWindow : Window
             Width = Dim.Fill(),
             Height = Dim.Fill(1)
         };
+        Browse = new BrowseWindow(app, directory, rooms, session, ShowLiveRoom);
         _tabs.Add(
             LiveRoom,
-            new PlaceholderWindow("浏览", "浏览、搜索直播列表将在这里实现。"),
+            Browse,
             new PlaceholderWindow("观看历史", "观看历史将在这里显示。"),
             new PlaceholderWindow("设置", "应用设置将在这里配置。"));
         _tabs.Value = LiveRoom;
@@ -74,11 +77,15 @@ internal sealed class MainWindow : Window
 
     public LiveRoomWindow LiveRoom { get; }
 
-    public bool IsLiveRoomInputFocused => LiveRoom.IsInputFocused;
+    public BrowseWindow Browse { get; }
+
+    public bool IsTextInputFocused => LiveRoom.IsInputFocused || Browse.IsSearchInputFocused;
 
     public void SelectPreviousTab() => SelectTab(-1);
 
     public void SelectNextTab() => SelectTab(1);
+
+    private void ShowLiveRoom() => _tabs.Value = LiveRoom;
 
     private void RefreshStatusBar()
     {

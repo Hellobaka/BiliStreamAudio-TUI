@@ -47,6 +47,7 @@ internal static class Program
         IAuthService auth;
         ITokenRefreshService tokenRefresh;
         IRoomResolver rooms;
+        ILiveDirectoryService directory;
         IStreamResolver streams;
         IAudioPlayer audio;
         IDanmakuConnection danmaku;
@@ -58,6 +59,7 @@ internal static class Program
             auth = new MockAuthService();
             tokenRefresh = new MockTokenRefreshService();
             rooms = new MockRoomResolver();
+            directory = new MockLiveDirectoryService();
             streams = new MockStreamResolver();
             audio = new MockAudioPlayer();
             var mockDanmaku = new MockDanmakuConnection();
@@ -72,6 +74,7 @@ internal static class Program
             tokenRefresh = new CookieRefreshService(storage);
             http = new BiliHttp(sessionProvider: () => auth.Current);
             rooms = new RoomResolver(http);
+            directory = new LiveDirectoryService(http);
             streams = new StreamResolver(http);
             audio = new AudioPlayer();
             danmaku = new DanmakuConnection(() => auth.Current);
@@ -87,13 +90,23 @@ internal static class Program
             audio,
             danmaku,
             () => AskFallbackAsync(app));
-        var mainWindow = new MainWindow(app, session, auth, tokenRefresh, audio, danmaku, sender, mockMode);
+        var mainWindow = new MainWindow(
+            app,
+            session,
+            auth,
+            tokenRefresh,
+            rooms,
+            directory,
+            audio,
+            danmaku,
+            sender,
+            mockMode);
 
         app.Keyboard.KeyDown += (_, key) =>
         {
             // Application-level handling runs before the focused TextField consumes printable keys.
             // Q/E must remain normal input while the live room input has focus.
-            if (mainWindow.IsLiveRoomInputFocused)
+            if (mainWindow.IsTextInputFocused)
             {
                 return;
             }

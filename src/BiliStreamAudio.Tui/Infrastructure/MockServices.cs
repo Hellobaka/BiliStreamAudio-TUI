@@ -103,6 +103,39 @@ internal sealed class MockStreamResolver : IStreamResolver
     }
 }
 
+internal sealed class MockLiveDirectoryService : ILiveDirectoryService
+{
+    private static readonly IReadOnlyList<LiveDirectoryEntry> FollowedLive =
+    [
+        new(10001, 101, "绮梦", "深夜电台：一起听歌", true, DateTimeOffset.Now.AddHours(-2)),
+        new(10002, 102, "小北", "独立游戏试玩", true, DateTimeOffset.Now.AddMinutes(-48)),
+        new(10003, 103, "阿澈", "晚间杂谈", true, DateTimeOffset.Now.AddMinutes(-15))
+    ];
+
+    private static readonly IReadOnlyList<LiveDirectoryEntry> SearchResults =
+    [
+        new(10001, 101, "绮梦", "", true, DateTimeOffset.Now.AddHours(-2)),
+        new(0, 104, "未开播的模拟主播", "", false, null),
+        new(10004, 105, "游戏小屋", "", true, DateTimeOffset.Now.AddHours(-1))
+    ];
+
+    public Task<IReadOnlyList<LiveDirectoryEntry>> GetFollowedLiveAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(FollowedLive);
+    }
+
+    public async Task<IReadOnlyList<LiveDirectoryEntry>> SearchUsersAsync(string keyword, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await Task.Delay(Random.Shared.Next(300, 801), cancellationToken).ConfigureAwait(false);
+        return string.IsNullOrWhiteSpace(keyword)
+            || keyword.Equals("empty", StringComparison.OrdinalIgnoreCase)
+            ? []
+            : SearchResults;
+    }
+}
+
 internal sealed class MockAudioPlayer : IAudioPlayer
 {
     private PlaybackState _state = PlaybackState.Stopped;
