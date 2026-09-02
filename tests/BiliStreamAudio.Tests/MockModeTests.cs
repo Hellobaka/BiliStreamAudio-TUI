@@ -28,8 +28,7 @@ public sealed class MockModeTests
             new MockRoomResolver(),
             new MockStreamResolver(),
             audio,
-            danmaku,
-            () => Task.FromResult(false));
+            danmaku);
 
         await session.SwitchAsync(1000, CancellationToken.None);
         await sender.SendAsync(1000, "测试弹幕", auth.Current!, CancellationToken.None);

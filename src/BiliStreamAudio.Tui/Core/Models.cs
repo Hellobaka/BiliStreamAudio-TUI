@@ -29,7 +29,9 @@ public sealed record StreamDescriptor(
     string Format,
     int Quality,
     bool IsAudioOnly,
-    long RoomId);
+    long RoomId,
+    string Codec = "",
+    int? BitrateKbps = null);
 
 public sealed record AuthSession(
     IReadOnlyDictionary<string, string> Cookies,

@@ -60,6 +60,22 @@ public sealed class ProtocolTests
         Assert.Contains(options, option => option.StartsWith(":http-user-agent=Mozilla/5.0", StringComparison.Ordinal));
         Assert.Contains(":http-referrer=https://live.bilibili.com/26044264", options);
         Assert.Contains(":http-forward-cookies", options);
+        Assert.Contains(":network-caching=500", options);
+        Assert.Contains(":adaptive-livedelay=2000", options);
+        Assert.Contains(":adaptive-maxbuffer=2000", options);
+        Assert.Contains(":adaptive-lowlatency=1", options);
+    }
+
+    [Fact]
+    public void Playback_readiness_waits_for_an_audio_track_and_running_clock()
+    {
+        var readiness = new PlaybackReadiness();
+
+        Assert.Equal(PlaybackState.Buffering, readiness.OnBuffering(0));
+        Assert.Null(readiness.OnPlaying());
+        Assert.Null(readiness.OnAudioTrackSelected());
+        Assert.Equal(PlaybackState.Playing, readiness.OnTimeChanged(0));
+        Assert.Equal(PlaybackState.Playing, readiness.OnBuffering(0));
     }
 
     [Fact]

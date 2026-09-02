@@ -10,7 +10,7 @@
   <ItemGroup>
     <PackageReference Include="Terminal.Gui" Version="2.4.17" />
     <PackageReference Include="LibVLCSharp" Version="3.9.4" />
-    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.21" />
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
     <PackageReference Include="Serilog" Version="4.2.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />

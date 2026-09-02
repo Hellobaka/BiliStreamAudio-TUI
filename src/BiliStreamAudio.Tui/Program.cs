@@ -7,7 +7,6 @@ using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 using GuiApplication = Terminal.Gui.App.Application;
-using GuiMessageBox = Terminal.Gui.Views.MessageBox;
 
 namespace BiliStreamAudio.Tui;
 
@@ -84,12 +83,7 @@ internal static class Program
         using IApplication app = GuiApplication.Create();
         app.Init();
 
-        var session = new RoomSession(
-            rooms,
-            streams,
-            audio,
-            danmaku,
-            () => AskFallbackAsync(app));
+        var session = new RoomSession(rooms, streams, audio, danmaku);
         var mainWindow = new MainWindow(
             app,
             session,
@@ -136,22 +130,6 @@ internal static class Program
 
         session.DisposeAsync().AsTask().GetAwaiter().GetResult();
         http?.Dispose();
-    }
-
-    private static Task<bool> AskFallbackAsync(IApplication app)
-    {
-        var answer = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        app.Invoke(() =>
-        {
-            var choice = GuiMessageBox.Query(
-                app,
-                "音频流不可用",
-                "是否尝试普通最低清晰度流？",
-                "是",
-                "否");
-            answer.SetResult(choice == 0);
-        });
-        return answer.Task;
     }
 
     private static async Task LoadAndRefreshAsync(IAuthService auth, ITokenRefreshService refresh)

@@ -85,7 +85,9 @@ public sealed class StreamResolver(BiliHttp http) : IStreamResolver
                 var formatName = format.String("format_name");
                 foreach (var codec in format.GetProperty("codec").EnumerateArray())
                 {
+                    var codecName = codec.String("codec_name");
                     var quality = codec.TryGetProperty("current_qn", out var qn) ? qn.GetInt32() : 0;
+                    var bitrateKbps = StreamProfile.GetBitrateKbps(codec);
                     foreach (var urlInfo in codec.GetProperty("url_info").EnumerateArray())
                     {
                         var url = StreamUrl.Build(
@@ -99,20 +101,93 @@ public sealed class StreamResolver(BiliHttp http) : IStreamResolver
                                 protocol,
                                 formatName,
                                 quality,
-                                onlyAudio,
-                                room.RoomId));
+                                StreamProfile.IsAudioOnly(onlyAudio, codecName, url),
+                                room.RoomId,
+                                codecName,
+                                bitrateKbps));
                         }
                     }
                 }
             }
         }
-        return result
-            .OrderByDescending(stream => stream.Protocol.Equals(
-                "http_hls",
-                StringComparison.OrdinalIgnoreCase))
-            .ThenByDescending(stream => stream.Quality)
+        // 实测中码率（画质）对启动延迟的影响远大于协议/格式：2 Mbps 的 TS 流
+        // （约 3.5s）远快于 8 Mbps 的 FLV 流（约 16.7s）。因此优先选最低画质，
+        // 同画质下再按低延迟顺序（FLV → fMP4 → TS）选择。
+        return (onlyAudio
+                ? result.Where(stream => stream.IsAudioOnly)
+                : result)
+            .OrderBy(stream => stream.Quality)
+            .ThenBy(StreamProfile.GetLatencyRank)
+            .ThenBy(stream => StreamProfile.GetCodecRank(stream.Codec))
             .ToArray();
     }
+}
+
+internal static class StreamProfile
+{
+    public static bool IsAudioOnly(bool requestedAudioOnly, string codec, Uri url)
+    {
+        if (!requestedAudioOnly || IsVideoCodec(codec))
+        {
+            return false;
+        }
+
+        return !url.Query.TrimStart('?').Split('&').Any(parameter =>
+            string.Equals(parameter, "media_type=0", StringComparison.Ordinal));
+    }
+
+    public static int GetLatencyRank(StreamDescriptor stream)
+    {
+        if (stream.Protocol.Equals("http_stream", StringComparison.OrdinalIgnoreCase)
+            && stream.Format.Equals("flv", StringComparison.OrdinalIgnoreCase))
+        {
+            return 0;
+        }
+
+        if (stream.Protocol.Equals("http_hls", StringComparison.OrdinalIgnoreCase)
+            && stream.Format.Equals("fmp4", StringComparison.OrdinalIgnoreCase))
+        {
+            return 1;
+        }
+
+        if (stream.Protocol.Equals("http_hls", StringComparison.OrdinalIgnoreCase)
+            && stream.Format.Equals("ts", StringComparison.OrdinalIgnoreCase))
+        {
+            return 2;
+        }
+
+        return 3;
+    }
+
+    public static int GetCodecRank(string codec) => codec.Equals(
+        "avc",
+        StringComparison.OrdinalIgnoreCase) ? 0 : 1;
+
+    /// <summary>
+    /// 读取接口返回的实时平均码率（media_info.realtime_avg_bw，单位 字节/秒），
+    /// 换算为 kbps 用于日志展示。
+    /// </summary>
+    public static int? GetBitrateKbps(JsonElement codec)
+    {
+        if (codec.TryGetProperty("media_info", out var mediaInfo)
+            && mediaInfo.TryGetProperty("realtime_avg_bw", out var bandwidth)
+            && bandwidth.ValueKind == JsonValueKind.Number
+            && bandwidth.GetInt64() > 0)
+        {
+            // 字节/秒 → 比特/秒 → kbps
+            return (int)(bandwidth.GetInt64() * 8 / 1000);
+        }
+
+        return null;
+    }
+
+    private static bool IsVideoCodec(string codec) => codec.Equals(
+        "avc",
+        StringComparison.OrdinalIgnoreCase)
+        || codec.Equals("h264", StringComparison.OrdinalIgnoreCase)
+        || codec.Equals("hevc", StringComparison.OrdinalIgnoreCase)
+        || codec.Equals("h265", StringComparison.OrdinalIgnoreCase)
+        || codec.Equals("av1", StringComparison.OrdinalIgnoreCase);
 }
 
 public static class StreamUrl

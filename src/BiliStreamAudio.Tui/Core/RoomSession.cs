@@ -6,7 +6,6 @@ public sealed class RoomSession : IAsyncDisposable
     private readonly IStreamResolver _streams;
     private readonly IAudioPlayer _audio;
     private readonly IDanmakuConnection _danmaku;
-    private readonly Func<Task<bool>> _fallbackPrompt;
     private CancellationTokenSource? _sessionLifetime;
 
     public LiveRoom? Room
@@ -21,14 +20,12 @@ public sealed class RoomSession : IAsyncDisposable
         IRoomResolver rooms,
         IStreamResolver streams,
         IAudioPlayer audio,
-        IDanmakuConnection danmaku,
-        Func<Task<bool>> fallbackPrompt)
+        IDanmakuConnection danmaku)
     {
         _rooms = rooms;
         _streams = streams;
         _audio = audio;
         _danmaku = danmaku;
-        _fallbackPrompt = fallbackPrompt;
     }
 
     public async Task SwitchAsync(long roomId, CancellationToken cancellationToken)
@@ -48,7 +45,7 @@ public sealed class RoomSession : IAsyncDisposable
         RoomChanged?.Invoke(this, room);
 
         var candidates = await _streams.ResolveAudioAsync(room, false, token).ConfigureAwait(false);
-        if (candidates.Count == 0 && await _fallbackPrompt().ConfigureAwait(false))
+        if (candidates.Count == 0)
         {
             candidates = await _streams.ResolveAudioAsync(room, true, token).ConfigureAwait(false);
         }
@@ -56,7 +53,7 @@ public sealed class RoomSession : IAsyncDisposable
         var stream = candidates.FirstOrDefault() ?? throw new InvalidOperationException("没有可用的音频流。");
         await _audio.PlayAsync(stream, token).ConfigureAwait(false);
         await _danmaku.ConnectAsync(room, token).ConfigureAwait(false);
-        StatusChanged?.Invoke(this, $"正在播放 {stream.Protocol}/{stream.Format}");
+        StatusChanged?.Invoke(this, $"已启动 {stream.Protocol}/{stream.Format}，等待音频输出…");
     }
     public async Task RefreshAsync(CancellationToken cancellationToken)
     {
