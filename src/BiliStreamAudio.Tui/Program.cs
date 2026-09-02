@@ -18,7 +18,7 @@ internal static class Program
     private const int MaximumMessageCount = 500;
 
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
         var localData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var logPath = Path.Combine(localData, "BiliStreamAudio-TUI", "logs", "app-.log");
@@ -30,7 +30,10 @@ internal static class Program
 
         try
         {
-            Run();
+            var mockMode = AppOptions.IsMockMode(
+                args,
+                Environment.GetEnvironmentVariable(AppOptions.MockModeEnvironmentVariable));
+            Run(mockMode);
         }
         catch (Exception exception)
         {
@@ -43,29 +46,54 @@ internal static class Program
         }
     }
 
-    private static void Run()
+    private static void Run(bool mockMode)
     {
-        var storage = new AuthStorage();
-        var auth = new WebViewAuthService(storage);
-        auth.LoadAsync(CancellationToken.None).GetAwaiter().GetResult();
-        var tokenRefresh = new CookieRefreshService(storage);
-        var http = new BiliHttp(sessionProvider: () => auth.Current);
-        var audio = new AudioPlayer();
-        var danmaku = new DanmakuConnection(() => auth.Current);
-        var sender = new DanmakuSender();
+        IAuthService auth;
+        ITokenRefreshService tokenRefresh;
+        IRoomResolver rooms;
+        IStreamResolver streams;
+        IAudioPlayer audio;
+        IDanmakuConnection danmaku;
+        IDanmakuSender sender;
+        BiliHttp? http = null;
+
+        if (mockMode)
+        {
+            auth = new MockAuthService();
+            tokenRefresh = new MockTokenRefreshService();
+            rooms = new MockRoomResolver();
+            streams = new MockStreamResolver();
+            audio = new MockAudioPlayer();
+            var mockDanmaku = new MockDanmakuConnection();
+            danmaku = mockDanmaku;
+            sender = new MockDanmakuSender(mockDanmaku);
+        }
+        else
+        {
+            var storage = new AuthStorage();
+            auth = new WebViewAuthService(storage);
+            auth.LoadAsync(CancellationToken.None).GetAwaiter().GetResult();
+            tokenRefresh = new CookieRefreshService(storage);
+            http = new BiliHttp(sessionProvider: () => auth.Current);
+            rooms = new RoomResolver(http);
+            streams = new StreamResolver(http);
+            audio = new AudioPlayer();
+            danmaku = new DanmakuConnection(() => auth.Current);
+            sender = new DanmakuSender();
+        }
         using IApplication app = GuiApplication.Create();
         app.Init();
 
         var session = new RoomSession(
-            new RoomResolver(http),
-            new StreamResolver(http),
+            rooms,
+            streams,
             audio,
             danmaku,
             () => AskFallbackAsync(app));
 
         var window = new Window
         {
-            Title = "BiliStreamAudio-TUI",
+            Title = mockMode ? "BiliStreamAudio-TUI（模拟模式）" : "BiliStreamAudio-TUI",
             X = 0,
             Y = 0,
             Width = Dim.Fill(),
@@ -117,6 +145,14 @@ internal static class Program
             header.Text = $"{roomStatus} · {sessionStatus} · {loginStatus}";
         }
 
+        void RefreshFooter()
+        {
+            var muteStatus = audio.IsMuted ? " (静音)" : string.Empty;
+            var mockStatus = mockMode ? " · 模拟模式" : string.Empty;
+            footer.Text = $"音量 {audio.Volume}{muteStatus} · {audio.State}{mockStatus} · r 刷新 · m 静音 · +/- 音量 · l 登录 · Tab 焦点 · q 退出";
+            footer.SetNeedsDraw();
+        }
+
         void AddMessage(string value)
         {
             Ui(() =>
@@ -138,17 +174,19 @@ internal static class Program
             sessionStatus = status;
             RefreshHeader();
         });
-        audio.StateChanged += (_, state) => Ui(() =>
-        {
-            var muteStatus = audio.IsMuted ? " (静音)" : string.Empty;
-            footer.Text = $"音量 {audio.Volume}{muteStatus} · {state} · r 刷新 · m 静音 · +/- 音量 · l 登录 · Tab 焦点 · q 退出";
-        });
+        audio.StateChanged += (_, _) => Ui(RefreshFooter);
         session.RoomChanged += (_, _) => Ui(RefreshHeader);
         session.StatusChanged += (_, status) => Ui(() =>
         {
             sessionStatus = status;
             RefreshHeader();
         });
+
+        RefreshFooter();
+        if (mockMode)
+        {
+            AddMessage("模拟模式已启用：所有直播间、音频、登录和弹幕操作均不会发送网络请求。");
+        }
 
         input.KeyDown += (_, key) =>
         {
@@ -204,16 +242,19 @@ internal static class Program
             else if (IsKey(key, 'm'))
             {
                 audio.ToggleMute();
+                RefreshFooter();
                 key.Handled = true;
             }
             else if (key == (Key)'+')
             {
                 audio.SetVolume(audio.Volume + 5);
+                RefreshFooter();
                 key.Handled = true;
             }
             else if (key == (Key)'-')
             {
                 audio.SetVolume(audio.Volume - 5);
+                RefreshFooter();
                 key.Handled = true;
             }
             else if (IsKey(key, 'l'))
@@ -233,7 +274,7 @@ internal static class Program
         app.Run(window);
 
         session.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        http.Dispose();
+        http?.Dispose();
     }
 
     private static async Task RunUiTask(
