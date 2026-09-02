@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Text;
 using BiliStreamAudio.Tui.Core;
 using BiliStreamAudio.Tui.Infrastructure;
 using Serilog;
@@ -102,6 +103,7 @@ internal static class Program
         var header = new GuiLabel
         {
             Text = "未选择直播间 · 已停止 · 未登录",
+            HotKeySpecifier = new Rune(0xffff),
             X = 1,
             Y = 0,
             Width = Dim.Fill(2)
@@ -125,6 +127,7 @@ internal static class Program
         var footer = new GuiLabel
         {
             Text = "音量 70 · r 刷新 · m 静音 · +/- 音量 · l 登录 · Tab 焦点 · q 退出",
+            HotKeySpecifier = new Rune(0xffff),
             X = 1,
             Y = Pos.AnchorEnd(1),
             Width = Dim.Fill(2)

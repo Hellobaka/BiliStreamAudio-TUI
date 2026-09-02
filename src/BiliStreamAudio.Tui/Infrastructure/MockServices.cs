@@ -47,7 +47,7 @@ internal sealed class MockAuthService : IAuthService
         null,
         1,
         null,
-        "Mock 用户");
+        "Mock_用户");
 }
 
 internal sealed class MockTokenRefreshService : ITokenRefreshService
@@ -76,7 +76,7 @@ internal sealed class MockRoomResolver : IRoomResolver
             room.RequestedId,
             1,
             $"模拟直播间 {room.RequestedId}",
-            "Mock 主播",
+            "Mock_主播",
             true));
     }
 }

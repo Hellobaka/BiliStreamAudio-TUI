@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "BiliStreamAudio.Tui": {
+      "commandName": "Project",
+      "commandLineArgs": "--mock"
+    }
+  }
+}
