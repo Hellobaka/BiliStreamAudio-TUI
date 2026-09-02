@@ -14,6 +14,7 @@ namespace BiliStreamAudio.Tui.Views;
 internal sealed class LiveRoomWindow : Window
 {
     private const int MaximumMessageCount = 500;
+    private const string DanmakuInputUnavailableText = "请先在“浏览”页面选择直播间并登录，然后发送弹幕。";
 
     private readonly IApplication _app;
     private readonly RoomSession _session;
@@ -84,6 +85,7 @@ internal sealed class LiveRoomWindow : Window
             : "未选择直播间";
         _header.Text = $"{roomStatus} · {_sessionStatus} · {CreateLoginStatus(_auth.Current)}";
         _header.SetNeedsDraw();
+        RefreshDanmakuInput();
     }
 
     public void AddMessage(string value)
@@ -143,13 +145,7 @@ internal sealed class LiveRoomWindow : Window
             var value = _input.Text.ToString() ?? string.Empty;
             _input.Text = string.Empty;
 
-            if (long.TryParse(value, out var roomId))
-            {
-                _ = RunUiTask(
-                    () => _session.SwitchAsync(roomId, CancellationToken.None),
-                    AddMessage);
-            }
-            else if (_session.Room is { } room && _auth.Current is not null)
+            if (_session.Room is { } room && _auth.Current?.IsAuthenticated == true)
             {
                 _ = RunUiTask(
                     () => SendDanmakuAsync(room.RoomId, value),
@@ -157,7 +153,7 @@ internal sealed class LiveRoomWindow : Window
             }
             else
             {
-                AddMessage("请输入房间号；登录后可发送弹幕。");
+                RefreshDanmakuInput();
             }
 
             key.Handled = true;
@@ -224,6 +220,14 @@ internal sealed class LiveRoomWindow : Window
 
         await _auth.SaveAsync(result.Session, CancellationToken.None).ConfigureAwait(false);
         await _sender.SendAsync(roomId, text, result.Session, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private void RefreshDanmakuInput()
+    {
+        var isAvailable = _session.Room is not null && _auth.Current?.IsAuthenticated == true;
+        _input.Enabled = isAvailable;
+        _input.Text = isAvailable ? string.Empty : DanmakuInputUnavailableText;
+        _input.SetNeedsDraw();
     }
 
     private static string CreateLoginStatus(AuthSession? session)
