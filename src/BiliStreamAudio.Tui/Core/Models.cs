@@ -44,11 +44,103 @@ public sealed record AuthSession(
     public bool IsAuthenticated => Cookies.ContainsKey("SESSDATA") && Cookies.ContainsKey("bili_jct");
 }
 
+public abstract record LiveEvent(
+    string Type,
+    DateTimeOffset ReceivedAt);
+
 public sealed record DanmakuEvent(
     string UserName,
     string Message,
     DateTimeOffset ReceivedAt,
-    string Type = "DANMU_MSG");
+    string Type = "DANMU_MSG",
+    long UserId = 0,
+    FanMedal? Medal = null) : LiveEvent(Type, ReceivedAt);
+
+public sealed record FanMedal(
+    long Id,
+    string Name,
+    int Level,
+    long AnchorUserId,
+    string AnchorName,
+    long AnchorRoomId,
+    bool IsLighted,
+    int GuardLevel,
+    int Color,
+    int ColorStart,
+    int ColorEnd,
+    int ColorBorder,
+    string GuardIcon,
+    string HonorIcon,
+    string ColorStartV2,
+    string ColorEndV2,
+    string ColorBorderV2,
+    string TextColorV2,
+    string LevelColorV2);
+
+public sealed record GiftEvent(
+    long UserId,
+    string UserName,
+    long GiftId,
+    string GiftName,
+    int Count,
+    long UnitPrice,
+    long TotalCoin,
+    string CoinType,
+    string EventId,
+    string BatchComboId,
+    DateTimeOffset ReceivedAt,
+    string Type = "SEND_GIFT") : LiveEvent(Type, ReceivedAt)
+{
+    public bool IsPaid =>
+        string.Equals(CoinType, "gold", StringComparison.OrdinalIgnoreCase)
+        && TotalCoin > 0;
+
+    public decimal AmountCny => IsPaid ? TotalCoin / 1000m : 0m;
+}
+
+public sealed record GiftComboEvent(
+    long UserId,
+    string UserName,
+    long GiftId,
+    string GiftName,
+    int TotalCount,
+    long TotalCoin,
+    string ComboId,
+    string BatchComboId,
+    DateTimeOffset ReceivedAt,
+    string Type = "COMBO_SEND") : LiveEvent(Type, ReceivedAt);
+
+public sealed record SuperChatEvent(
+    string Id,
+    long UserId,
+    string UserName,
+    string Message,
+    string TranslatedMessage,
+    string JapaneseMessage,
+    int PriceCny,
+    DateTimeOffset StartsAt,
+    DateTimeOffset? EndsAt,
+    int DurationSeconds,
+    string Type = "SUPER_CHAT_MESSAGE") : LiveEvent(Type, StartsAt);
+
+public sealed record SuperChatDeleteEvent(
+    IReadOnlyList<string> Ids,
+    DateTimeOffset ReceivedAt,
+    string Type = "SUPER_CHAT_MESSAGE_DELETE") : LiveEvent(Type, ReceivedAt);
+
+public sealed record GuardPurchaseEvent(
+    long UserId,
+    string UserName,
+    int GuardLevel,
+    int Count,
+    long Price,
+    long GiftId,
+    string GiftName,
+    DateTimeOffset ReceivedAt,
+    string Type = "GUARD_BUY") : LiveEvent(Type, ReceivedAt)
+{
+    public decimal AmountCny => Price / 1000m;
+}
 
 public enum PlaybackState
 {

@@ -45,6 +45,7 @@ public interface ITokenRefreshService
 
 public interface IDanmakuConnection : IAsyncDisposable
 {
+    event EventHandler<LiveEvent>? EventReceived;
     event EventHandler<DanmakuEvent>? Received;
     event EventHandler<string>? StatusChanged;
 

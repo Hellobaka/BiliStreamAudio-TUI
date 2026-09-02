@@ -185,6 +185,7 @@ internal sealed class MockAudioPlayer : IAudioPlayer
 
 internal sealed class MockDanmakuConnection : IDanmakuConnection
 {
+    public event EventHandler<LiveEvent>? EventReceived;
     public event EventHandler<DanmakuEvent>? Received;
     public event EventHandler<string>? StatusChanged;
 
@@ -202,7 +203,9 @@ internal sealed class MockDanmakuConnection : IDanmakuConnection
 
     public void Publish(string userName, string message)
     {
-        Received?.Invoke(this, new DanmakuEvent(userName, message, DateTimeOffset.Now));
+        var item = new DanmakuEvent(userName, message, DateTimeOffset.Now);
+        EventReceived?.Invoke(this, item);
+        Received?.Invoke(this, item);
     }
 }
 

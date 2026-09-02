@@ -18,6 +18,7 @@ public sealed class DanmakuConnection(
     private ClientWebSocket? _socket;
     private Task? _receiveTask;
 
+    public event EventHandler<LiveEvent>? EventReceived;
     public event EventHandler<DanmakuEvent>? Received;
     public event EventHandler<string>? StatusChanged;
 
@@ -154,7 +155,11 @@ public sealed class DanmakuConnection(
 
             foreach (var item in DanmakuProtocol.Parse(stream.ToArray()))
             {
-                Received?.Invoke(this, item);
+                EventReceived?.Invoke(this, item);
+                if (item is DanmakuEvent danmaku)
+                {
+                    Received?.Invoke(this, danmaku);
+                }
             }
 
             stream.SetLength(0);
