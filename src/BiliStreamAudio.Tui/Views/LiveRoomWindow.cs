@@ -31,6 +31,7 @@ internal sealed class LiveRoomWindow : Window
     private readonly GuiLabel _inputStatus;
     private readonly ObservableCollection<DanmakuListItem> _messageItems = [];
     private readonly List<PendingDanmaku> _pendingDanmaku = [];
+    private long? _currentRoomId;
     private string _sessionStatus = "已停止";
     private DateTimeOffset? _cooldownEndsAt;
     private object? _cooldownToken;
@@ -91,6 +92,33 @@ internal sealed class LiveRoomWindow : Window
 
     public bool IsInputFocused => _input.HasFocus;
 
+    private void OnRoomChanged(LiveRoom room)
+    {
+        if (_currentRoomId is { } previousRoomId && previousRoomId != room.RoomId)
+        {
+            ClearDanmakuList();
+        }
+
+        _currentRoomId = room.RoomId;
+        RefreshHeader();
+    }
+
+    private void ClearDanmakuList()
+    {
+        foreach (var pending in _pendingDanmaku)
+        {
+            StopDanmakuAnimation(pending);
+            if (pending.ConfirmationExpiryToken is { } expiryToken)
+            {
+                _app.RemoveTimeout(expiryToken);
+            }
+        }
+
+        _pendingDanmaku.Clear();
+        _messageItems.Clear();
+        _messages.SetNeedsDraw();
+    }
+
     public void RefreshHeader()
     {
         var roomStatus = _session.Room is { } room
@@ -137,7 +165,7 @@ internal sealed class LiveRoomWindow : Window
             _sessionStatus = status;
             RefreshHeader();
         });
-        _session.RoomChanged += (_, _) => _app.Invoke(RefreshHeader);
+        _session.RoomChanged += (_, room) => _app.Invoke(() => OnRoomChanged(room));
         _session.StatusChanged += (_, status) => _app.Invoke(() =>
         {
             _sessionStatus = status;
