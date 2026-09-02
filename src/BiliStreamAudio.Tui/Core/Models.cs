@@ -55,6 +55,18 @@ public enum PlaybackState
     Error
 }
 
+public static class PlaybackStateExtensions
+{
+    public static string ToDisplayText(this PlaybackState state) => state switch
+    {
+        PlaybackState.Stopped => "已停止",
+        PlaybackState.Buffering => "缓冲中",
+        PlaybackState.Playing => "播放中",
+        PlaybackState.Error => "播放错误",
+        _ => "未知状态"
+    };
+}
+
 public sealed record DanmakuServer(string Host, int WsPort, int WssPort, string Token);
 
 public sealed record RefreshResult(bool Success, AuthSession? Session, string? Error)

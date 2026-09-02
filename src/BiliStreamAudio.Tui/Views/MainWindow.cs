@@ -91,7 +91,7 @@ internal sealed class MainWindow : Window
     {
         var muteStatus = _audio.IsMuted ? " (静音)" : string.Empty;
         var mockStatus = _mockMode ? " · 模拟模式" : string.Empty;
-        _statusBar.Text = $"音量 {_audio.Volume}{muteStatus} · {_audio.State}{mockStatus} · r 刷新 · m 静音 · +/- 音量 · l 登录 · Q/E 切换标签 · Ctrl+Q 退出";
+        _statusBar.Text = $"音量 {_audio.Volume}{muteStatus} · {_audio.State.ToDisplayText()}{mockStatus} · r 刷新 · m 静音 · +/- 音量 · l 登录 · Q/E 切换标签 · Ctrl+Q 退出";
         _statusBar.SetNeedsDraw();
     }
 
