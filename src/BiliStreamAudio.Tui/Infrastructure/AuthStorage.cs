@@ -81,7 +81,7 @@ public sealed class AuthStorage
     {
         var encrypted = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
         var bytes = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
-        return JsonSerializer.Deserialize<AuthSession>(bytes) ?? throw new JsonException("Empty session.");
+        return JsonSerializer.Deserialize<AuthSession>(bytes) ?? throw new JsonException("登录会话为空。");
     }
 
     private static async Task WriteAsync(string path, AuthSession session, CancellationToken cancellationToken)

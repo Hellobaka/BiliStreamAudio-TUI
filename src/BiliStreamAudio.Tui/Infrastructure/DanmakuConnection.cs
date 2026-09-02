@@ -40,7 +40,7 @@ public sealed class DanmakuConnection(
         var servers = ParseServers(data, token);
         if (servers.Length == 0)
         {
-            throw new InvalidOperationException("No danmaku server was returned.");
+            throw new InvalidOperationException("哔哩哔哩未返回弹幕服务器。");
         }
 
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

@@ -118,7 +118,7 @@ internal sealed class LiveRoomWindow : Window
         catch (Exception exception)
         {
             Log.Error(exception, "Operation failed");
-            showError(exception.Message);
+            showError(exception.ToDisplayText());
         }
     }
 
@@ -226,7 +226,7 @@ internal sealed class LiveRoomWindow : Window
         catch (Exception exception)
         {
             Log.Error(exception, "Official login window failed");
-            AddMessage($"登录失败：{exception.Message}");
+            AddMessage($"登录失败：{exception.ToDisplayText()}");
         }
     }
 

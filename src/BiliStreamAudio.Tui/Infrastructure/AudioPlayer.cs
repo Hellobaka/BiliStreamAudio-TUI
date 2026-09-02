@@ -53,7 +53,7 @@ public sealed class AudioPlayer : IAudioPlayer
 
         if (!_player.Play(media))
         {
-            throw new InvalidOperationException("LibVLC could not start the audio stream.");
+            throw new InvalidOperationException("音频播放器无法启动直播流。");
         }
 
         return Task.CompletedTask;

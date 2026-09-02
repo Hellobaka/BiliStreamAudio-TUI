@@ -174,7 +174,7 @@ internal abstract class LiveListWindow : Window
         {
             _app.Invoke(() =>
             {
-                onError(exception.Message);
+                onError(exception.ToDisplayText());
                 SetNeedsDraw();
             });
         }

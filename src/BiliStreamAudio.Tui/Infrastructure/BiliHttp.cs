@@ -210,10 +210,7 @@ internal static class BiliJson
     {
         if (document.RootElement.TryGetProperty("code", out var code) && code.GetInt32() != 0)
         {
-            var message = document.RootElement.TryGetProperty("message", out var messageElement)
-                ? messageElement.GetString()
-                : "Bilibili API request failed";
-            throw new InvalidOperationException($"哔哩哔哩接口返回 {code.GetInt32()}：{message}");
+            throw new InvalidOperationException($"哔哩哔哩接口请求失败（错误码：{code.GetInt32()}）。");
         }
     }
 

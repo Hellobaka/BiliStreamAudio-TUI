@@ -67,6 +67,36 @@ public static class PlaybackStateExtensions
     };
 }
 
+public static class ExceptionExtensions
+{
+    public static string ToDisplayText(this Exception exception) => exception switch
+    {
+        OperationCanceledException => "操作已取消。",
+        TimeoutException => "操作超时，请稍后重试。",
+        HttpRequestException => "网络请求失败，请检查网络连接后重试。",
+        System.Net.Sockets.SocketException => "网络连接失败，请检查网络连接后重试。",
+        System.Net.WebSockets.WebSocketException => "弹幕连接失败，请稍后重试。",
+        System.Text.Json.JsonException => "服务器返回的数据格式无效，请稍后重试。",
+        System.Security.Cryptography.CryptographicException => "本地登录信息无法读取，请重新登录。",
+        UnauthorizedAccessException => "没有访问本地文件的权限。",
+        IOException => "读取或写入本地文件失败，请检查磁盘空间和文件权限。",
+        ArgumentException => RemoveParameterName(exception.Message),
+        _ when ContainsChinese(exception.Message) => exception.Message,
+        _ => "操作失败，请稍后重试。"
+    };
+
+    private static string RemoveParameterName(string message)
+    {
+        const string parameterPrefix = " (Parameter '";
+        var parameterIndex = message.IndexOf(parameterPrefix, StringComparison.Ordinal);
+        return parameterIndex >= 0 ? message[..parameterIndex] : message;
+    }
+
+    private static bool ContainsChinese(string value) => value.Any(character =>
+        character is >= '\u3400' and <= '\u4dbf'
+        or >= '\u4e00' and <= '\u9fff');
+}
+
 public sealed record DanmakuServer(string Host, int WsPort, int WssPort, string Token);
 
 public sealed record RefreshResult(bool Success, AuthSession? Session, string? Error)

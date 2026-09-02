@@ -131,7 +131,7 @@ public sealed class WebViewAuthService : IAuthService
                 catch (Exception exception)
                 {
                     var failure = new InvalidOperationException(
-                        "WebView2 初始化失败。请确认已安装 WebView2 Runtime。",
+                        "WebView2 初始化失败。请确认已安装 WebView2 运行环境。",
                         exception);
                     result.TrySetException(failure);
                     form.Close();
@@ -261,7 +261,7 @@ public sealed class WebViewAuthService : IAuthService
             }
             catch (Exception exception)
             {
-                MessageBox.Show(form, exception.Message, "登录尚未完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(form, exception.ToDisplayText(), "登录尚未完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 complete.Enabled = true;
             }
         }

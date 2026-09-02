@@ -30,7 +30,7 @@ public sealed class CookieRefreshService(
     {
         if (!session.IsAuthenticated)
         {
-            return RefreshResult.Failed("Not logged in.");
+            return RefreshResult.Failed("请先登录。");
         }
 
         var today = DateOnly.FromDateTime(DateTime.Now);
@@ -63,7 +63,7 @@ public sealed class CookieRefreshService(
 
             if (string.IsNullOrWhiteSpace(session.RefreshToken))
             {
-                return RefreshResult.Failed("The refresh token is missing; open official login again.");
+                return RefreshResult.Failed("缺少登录刷新令牌，请重新打开官方登录窗口。");
             }
 
             await storage.SaveBackupAsync(session, cancellationToken).ConfigureAwait(false);
@@ -80,7 +80,7 @@ public sealed class CookieRefreshService(
 
             if (!match.Success)
             {
-                return RefreshResult.Failed("Could not obtain refresh CSRF.");
+                return RefreshResult.Failed("无法获取登录刷新验证信息。");
             }
 
             var csrf = WebUtility.HtmlDecode(match.Groups["csrf"].Value);
@@ -102,7 +102,7 @@ public sealed class CookieRefreshService(
             if (!newCookies.TryGetValue("bili_jct", out var newCsrf)
                 || string.IsNullOrEmpty(newToken))
             {
-                return RefreshResult.Failed("Refresh response did not return a complete session.");
+                return RefreshResult.Failed("登录刷新未返回完整会话，请重新登录。");
             }
 
             KeyValuePair<string, string>[] confirmForm =
@@ -131,7 +131,7 @@ public sealed class CookieRefreshService(
                                           or JsonException
                                           or CryptographicException)
         {
-            return RefreshResult.Failed(exception.Message);
+            return RefreshResult.Failed(exception.ToDisplayText());
         }
     }
 
