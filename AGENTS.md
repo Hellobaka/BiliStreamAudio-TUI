@@ -10,6 +10,8 @@ is the composition root. Tests live in `tests/BiliStreamAudio.Tests/` and target
 the public behavior of core and infrastructure code. Keep TUI state out of
 transport and protocol helpers so those helpers remain directly testable.
 
+哔哩哔哩API参考请阅读文件夹：D:\Code\bilibili-API-collect-main
+
 ## Build, Test, and Development Commands
 
 Run commands from the repository root:
