@@ -7,20 +7,32 @@ public sealed class RoomResolver(BiliHttp http) : IRoomResolver
 {
     public async Task<LiveRoom> ResolveAsync(RoomReference room, CancellationToken cancellationToken)
     {
-        var requestUrl = $"room/v1/Room/room_init?id={room.RequestedId}";
-        using var json = await http
-            .GetLiveJsonAsync(requestUrl, room.RequestedId, cancellationToken)
+        var roomInfoUrl = $"room/v1/Room/get_info?room_id={room.RequestedId}";
+        using var roomInfoJson = await http
+            .GetLiveJsonAsync(roomInfoUrl, room.RequestedId, cancellationToken)
             .ConfigureAwait(false);
 
-        BiliJson.EnsureOk(json);
+        BiliJson.EnsureOk(roomInfoJson);
 
-        var data = json.RootElement.GetProperty("data");
+        var data = roomInfoJson.RootElement.GetProperty("data");
+        var uid = data.Int64("uid");
+        var anchorInfoUrl = $"live_user/v1/Master/info?uid={uid}";
+        using var anchorInfoJson = await http
+            .GetLiveJsonAsync(anchorInfoUrl, data.Int64("room_id"), cancellationToken)
+            .ConfigureAwait(false);
+
+        BiliJson.EnsureOk(anchorInfoJson);
+
+        var anchor = anchorInfoJson.RootElement
+            .GetProperty("data")
+            .GetProperty("info")
+            .String("uname");
         return new LiveRoom(
             data.Int64("room_id"),
             data.Int64("short_id"),
-            data.Int64("uid"),
+            uid,
             data.String("title"),
-            data.String("uname"),
+            anchor,
             data.Int64("live_status") == 1);
     }
 }
