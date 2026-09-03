@@ -9,18 +9,25 @@ using GuiView = Terminal.Gui.ViewBase.View;
 
 namespace BiliStreamAudio.Tui.Views;
 
+/// <summary>一个可按用户顺序显示任意状态栏元素的单行视图。</summary>
 internal sealed class SpectrumStatusBarView : GuiView
 {
-    private const int MinimumStatusColumns = 20;
     private const string Separator = " · ";
-    private string _statusText = string.Empty;
+    private IReadOnlyList<StatusBarElement> _elements = [];
+    private StatusBarContent _content = StatusBarContent.Preview;
     private IReadOnlyList<float> _magnitudes = [];
     private int _bandCount = 8;
     private SpectrumColorMode _colorMode = SpectrumColorMode.Rainbow;
 
-    public void SetStatus(string statusText)
+    public void SetElements(IEnumerable<StatusBarElement> elements)
     {
-        _statusText = statusText;
+        _elements = elements.Distinct().ToArray();
+        SetNeedsDraw();
+    }
+
+    public void SetContent(StatusBarContent content)
+    {
+        _content = content;
         SetNeedsDraw();
     }
 
@@ -32,10 +39,7 @@ internal sealed class SpectrumStatusBarView : GuiView
 
     public void SetBandCount(int bandCount)
     {
-        _bandCount = Math.Clamp(
-            bandCount,
-            LiveRoomDisplayOptions.MinimumSpectrumBandCount,
-            LiveRoomDisplayOptions.MaximumSpectrumBandCount);
+        _bandCount = Math.Clamp(bandCount, LiveRoomDisplayOptions.MinimumSpectrumBandCount, LiveRoomDisplayOptions.MaximumSpectrumBandCount);
         SetNeedsDraw();
     }
 
@@ -54,32 +58,61 @@ internal sealed class SpectrumStatusBarView : GuiView
             AddRune(column, 0, new Rune(' '));
         }
 
-        var spectrumWidth = _magnitudes.Count == 0
-            ? 0
-            : Math.Min(_bandCount, Math.Max(0, width - MinimumStatusColumns - Separator.GetColumns()));
-        if (spectrumWidth == 0)
+        var columnOffset = 0;
+        foreach (var element in _elements)
         {
-            AddStr(0, 0, FitToColumns(_statusText, width));
-            return true;
-        }
+            var separatorWidth = columnOffset == 0 ? 0 : Separator.GetColumns();
+            var remaining = width - columnOffset - separatorWidth;
+            if (remaining <= 0)
+            {
+                break;
+            }
 
-        var spectrumStart = width - spectrumWidth;
-        var statusWidth = spectrumStart - Separator.GetColumns();
-        var status = FitToColumns(_statusText, statusWidth);
-        AddStr(0, 0, status);
-        AddStr(status.GetColumns(), 0, Separator);
-        var bars = SpectrumPresentation.Render(_magnitudes, spectrumWidth);
-        for (var index = 0; index < bars.Length; index++)
-        {
-            var color = SpectrumPresentation.GetColor(_colorMode, index, bars.Length);
-            SetAttribute(new GuiAttribute(new GuiColor(color.Red, color.Green, color.Blue), GuiColor.None));
-            AddRune(spectrumStart + index, 0, new Rune(bars[index]));
+            if (columnOffset > 0)
+            {
+                AddStr(columnOffset, 0, Separator);
+                columnOffset += separatorWidth;
+            }
+
+            if (element == StatusBarElement.Spectrum)
+            {
+                var bands = _magnitudes.Count == 0 ? 0 : Math.Min(_bandCount, remaining);
+                if (bands == 0)
+                {
+                    var placeholder = FitToColumns("频谱：--", remaining);
+                    AddStr(columnOffset, 0, placeholder);
+                    columnOffset += placeholder.GetColumns();
+                }
+                else
+                {
+                    var bars = SpectrumPresentation.Render(_magnitudes, bands);
+                    for (var index = 0; index < bars.Length; index++)
+                    {
+                        var color = SpectrumPresentation.GetColor(_colorMode, index, bars.Length);
+                        SetAttribute(new GuiAttribute(new GuiColor(color.Red, color.Green, color.Blue), GuiColor.None));
+                        AddRune(columnOffset + index, 0, new Rune(bars[index]));
+                    }
+
+                    columnOffset += bars.Length;
+                }
+            }
+            else
+            {
+                var text = FitToColumns(StatusBarFormatter.Format(element, _content), remaining);
+                AddStr(columnOffset, 0, text);
+                columnOffset += text.GetColumns();
+            }
+
+            if (columnOffset >= width)
+            {
+                break;
+            }
         }
 
         return true;
     }
 
-    private static string FitToColumns(string value, int width)
+    internal static string FitToColumns(string value, int width)
     {
         if (width <= 0)
         {
@@ -92,14 +125,18 @@ internal sealed class SpectrumStatusBarView : GuiView
         }
 
         const string ellipsis = "…";
-        var contentWidth = Math.Max(0, width - ellipsis.GetColumns());
+        if (width <= ellipsis.GetColumns())
+        {
+            return ellipsis;
+        }
+
         var result = new StringBuilder();
         var usedWidth = 0;
         foreach (var rune in value.EnumerateRunes())
         {
             var runeText = rune.ToString();
             var runeWidth = runeText.GetColumns();
-            if (usedWidth + runeWidth > contentWidth)
+            if (usedWidth + runeWidth > width - ellipsis.GetColumns())
             {
                 break;
             }

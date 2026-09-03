@@ -51,6 +51,7 @@ public sealed class MockModeTests
                 generated.TrySetResult(frame);
             }
         };
+        audio.SetSpectrumEnabled(true);
 
         await audio.PlayAsync(
             new StreamDescriptor(new Uri("https://example.test/live.flv"), "http_stream", "flv", 0, true, 1000),

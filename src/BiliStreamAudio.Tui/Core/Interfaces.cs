@@ -132,4 +132,7 @@ public interface IAudioSpectrumSource
     event EventHandler<SpectrumFrame>? SpectrumChanged;
 
     SpectrumFrame? CurrentSpectrum { get; }
+
+    /// <summary>控制 PCM 采样与频谱计算，未显示频谱时应关闭以避免后台开销。</summary>
+    void SetSpectrumEnabled(bool enabled);
 }

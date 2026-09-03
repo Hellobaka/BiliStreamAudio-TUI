@@ -79,6 +79,8 @@ public sealed class AudioPlayer : IAudioPlayer, IAudioSpectrumSource
     public bool IsMuted => _muted;
     public SpectrumFrame? CurrentSpectrum => _spectrumAnalyzer.CurrentSpectrum;
 
+    public void SetSpectrumEnabled(bool enabled) => _spectrumAnalyzer.SetEnabled(enabled);
+
     public Task PlayAsync(StreamDescriptor stream, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

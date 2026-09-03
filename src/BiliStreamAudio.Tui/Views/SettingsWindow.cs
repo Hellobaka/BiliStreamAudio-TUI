@@ -15,6 +15,7 @@ using GuiColor = Terminal.Gui.Drawing.Color;
 using GuiLabel = Terminal.Gui.Views.Label;
 using GuiLine = Terminal.Gui.Views.Line;
 using GuiListView = Terminal.Gui.Views.ListView;
+using GuiMessageBox = Terminal.Gui.Views.MessageBox;
 using GuiTextField = Terminal.Gui.Views.TextField;
 using GuiView = Terminal.Gui.ViewBase.View;
 
@@ -22,6 +23,8 @@ namespace BiliStreamAudio.Tui.Views;
 
 internal sealed class SettingsWindow : ApplicationWindow
 {
+    protected override bool SuppressEscape => _isEditingStatusBar;
+
     private static readonly string[] CategoryNames = ["账户", "通用配置", "状态栏设置", "关于"];
     private const int AboutBoxWidth = 48;
 
@@ -51,6 +54,7 @@ internal sealed class SettingsWindow : ApplicationWindow
     private readonly ITokenRefreshService _tokenRefresh;
     private readonly ISettingsStore _settingsStore;
     private readonly IApplication _app;
+    private readonly Action<bool> _setStatusBarEditing;
 
     private readonly GuiListView _categoryList;
     private readonly GuiView _contentArea;
@@ -64,6 +68,14 @@ internal sealed class SettingsWindow : ApplicationWindow
     private GuiListView? _blockedWordsListView;
     private ObservableCollection<string> _blockedWordsSource = [];
     private GuiTextField? _spectrumBandCountInput;
+    private bool _isEditingStatusBar;
+    private int _editingStatusBarRow;
+    private List<StatusBarElement> _statusBarDraftFirstRow = [];
+    private List<StatusBarElement> _statusBarDraftSecondRow = [];
+    private List<StatusBarElement> _statusBarOriginalFirstRow = [];
+    private List<StatusBarElement> _statusBarOriginalSecondRow = [];
+    private GuiListView? _availableStatusElements;
+    private GuiListView? _selectedStatusElements;
 
     public bool IsTextInputFocused => _blockedWordInput?.HasFocus == true
                                      || _spectrumBandCountInput?.HasFocus == true;
@@ -73,6 +85,7 @@ internal sealed class SettingsWindow : ApplicationWindow
         LiveRoomDisplayOptions displayOptions,
         IAudioPlayer audio,
         Action refreshDisplay,
+        Action<bool> setStatusBarEditing,
         IAuthService auth,
         ITokenRefreshService tokenRefresh,
         ISettingsStore settingsStore)
@@ -82,6 +95,7 @@ internal sealed class SettingsWindow : ApplicationWindow
         _displayOptions = displayOptions;
         _audio = audio;
         _refreshDisplay = refreshDisplay;
+        _setStatusBarEditing = setStatusBarEditing;
         _auth = auth;
         _tokenRefresh = tokenRefresh;
         _settingsStore = settingsStore;
@@ -143,11 +157,33 @@ internal sealed class SettingsWindow : ApplicationWindow
         {
             if (args.NewValue is { } index)
             {
+                if (_isEditingStatusBar && index != 2)
+                {
+                    _categoryList.SetSelection(2, false);
+                    return;
+                }
+
                 SwitchCategory(index);
             }
         };
         KeyDown += (_, key) =>
         {
+            if (_isEditingStatusBar)
+            {
+                if (key == Key.S.WithCtrl)
+                {
+                    SaveStatusBarDraft();
+                    key.Handled = true;
+                }
+                else if (key == Key.Esc)
+                {
+                    ConfirmExitStatusBarEditor();
+                    key.Handled = true;
+                }
+
+                return;
+            }
+
             var categoryIndex = key switch
             {
                 var value when value == Key.D1.WithAlt => 0,
@@ -213,7 +249,10 @@ internal sealed class SettingsWindow : ApplicationWindow
             ShowFanMedals = _displayOptions.ShowFanMedals,
             SpectrumBandCount = _displayOptions.SpectrumBandCount,
             SpectrumColorMode = _displayOptions.SpectrumColorMode.ToString(),
-            DanmakuBlockedList = [.. _displayOptions.DanmakuBlockedList]
+            DanmakuBlockedList = [.. _displayOptions.DanmakuBlockedList],
+            StatusBarFirstRow = [.. _settingsStore.Load().StatusBarFirstRow],
+            StatusBarSecondRow = [.. _settingsStore.Load().StatusBarSecondRow],
+            StatusBarLayoutVersion = _settingsStore.Load().StatusBarLayoutVersion
         };
     }
 
@@ -246,6 +285,11 @@ internal sealed class SettingsWindow : ApplicationWindow
 
     private void SelectCategory(int index)
     {
+        if (_isEditingStatusBar && index != 2)
+        {
+            return;
+        }
+
         _categoryList.SetSelection(index, false);
         SwitchCategory(index);
         _categoryList.SetFocus();
@@ -693,21 +737,43 @@ internal sealed class SettingsWindow : ApplicationWindow
 
     private void BuildStatusBarPanel()
     {
+        if (_isEditingStatusBar)
+        {
+            BuildStatusBarEditor();
+            return;
+        }
+
         var header = CreateSectionHeader("状态栏设置", 0);
 
-        var spectrumLabel = CreateSubHeader("频谱显示", 2);
+        var settings = _settingsStore.Load();
+        var layout = StatusBarLayout.Normalize(
+            settings.StatusBarFirstRow,
+            settings.StatusBarSecondRow,
+            settings.StatusBarLayoutVersion is null);
+        var firstSummary = CreateInfoLabel($"第一层：{FormatStatusBarRow(layout.FirstRow)}", 2);
+        var secondSummary = CreateInfoLabel($"第二层：{FormatStatusBarRow(layout.SecondRow)}", 3);
+        var editButton = new GuiButton
+        {
+            Text = "编辑状态栏",
+            X = 2,
+            Y = 5,
+            Width = 16
+        };
+        editButton.Accepted += (_, _) => BeginStatusBarEditing();
+
+        var spectrumLabel = CreateSubHeader("频谱显示", 7);
         var spectrumInputLabel = new GuiLabel
         {
             Text = $"频谱段数（{LiveRoomDisplayOptions.MinimumSpectrumBandCount}-{LiveRoomDisplayOptions.MaximumSpectrumBandCount}）",
             X = 2,
-            Y = 3,
+            Y = 8,
             Width = Dim.Fill(3)
         };
         var spectrumInput = _spectrumBandCountInput = new GuiTextField
         {
             Text = _displayOptions.SpectrumBandCount.ToString(),
             X = 2,
-            Y = 4,
+            Y = 9,
             Width = 10
         };
         spectrumInput.TextChanged += (_, _) =>
@@ -730,7 +796,7 @@ internal sealed class SettingsWindow : ApplicationWindow
         {
             Text = "  彩虹色频谱（关闭为单色）",
             X = 2,
-            Y = 6,
+            Y = 11,
             Width = Dim.Fill(3),
             Value = _displayOptions.SpectrumColorMode == SpectrumColorMode.Rainbow
                 ? GuiCheckState.Checked
@@ -748,10 +814,231 @@ internal sealed class SettingsWindow : ApplicationWindow
         ConfigurePanelNavigation(spectrumInput);
         ConfigurePanelNavigation(rainbowToggle);
 
-        var hint = CreateInfoLabel("调整状态栏频谱可视化效果", 8);
+        var hint = CreateInfoLabel("编辑布局时会在此显示两行静态预览。", 13);
 
-        _contentArea.Add(header, spectrumLabel, spectrumInputLabel, spectrumInput, rainbowToggle, hint);
+        ConfigurePanelNavigation(editButton);
+        _contentArea.Add(header, firstSummary, secondSummary, editButton, spectrumLabel, spectrumInputLabel, spectrumInput, rainbowToggle, hint);
     }
+
+    private void BeginStatusBarEditing()
+    {
+        var settings = _settingsStore.Load();
+        var layout = StatusBarLayout.Normalize(
+            settings.StatusBarFirstRow,
+            settings.StatusBarSecondRow,
+            settings.StatusBarLayoutVersion is null);
+        _statusBarOriginalFirstRow = [.. layout.FirstRow];
+        _statusBarOriginalSecondRow = [.. layout.SecondRow];
+        _statusBarDraftFirstRow = [.. layout.FirstRow];
+        _statusBarDraftSecondRow = [.. layout.SecondRow];
+        _editingStatusBarRow = 0;
+        _isEditingStatusBar = true;
+        _setStatusBarEditing(true);
+        SwitchCategory(2);
+    }
+
+    private void BuildStatusBarEditor()
+    {
+        var header = CreateSectionHeader("编辑状态栏布局", 0);
+        var hint = CreateInfoLabel("选择一层后添加、移除或排序。Ctrl+S 保存；Esc 退出。", 1);
+        var firstPreviewLabel = CreateSubHeader("静态预览 · 第一层", 3);
+        var previewFirst = CreateStatusBarPreview(_statusBarDraftFirstRow, 4);
+        var secondPreviewLabel = CreateSubHeader("静态预览 · 第二层", 6);
+        var previewSecond = CreateStatusBarPreview(_statusBarDraftSecondRow, 7);
+        var firstRowButton = new GuiButton
+        {
+            Text = _editingStatusBarRow == 0 ? "● 第一层" : "○ 第一层",
+            X = 2,
+            Y = 9,
+            Width = 15
+        };
+        firstRowButton.Accepted += (_, _) => SelectStatusBarEditingRow(0);
+        var secondRowButton = new GuiButton
+        {
+            Text = _editingStatusBarRow == 1 ? "● 第二层" : "○ 第二层",
+            X = 18,
+            Y = 9,
+            Width = 15
+        };
+        secondRowButton.Accepted += (_, _) => SelectStatusBarEditingRow(1);
+
+        var availableHeader = CreateSubHeader("可用元素", 11);
+        var selectedHeader = CreateSubHeader($"当前层已选元素（第{_editingStatusBarRow + 1}层）", 11);
+        selectedHeader.X = 32;
+        var used = _statusBarDraftFirstRow.Concat(_statusBarDraftSecondRow).ToHashSet();
+        var available = StatusBarLayout.AllElements.Where(element => !used.Contains(element)).ToList();
+        _availableStatusElements = new GuiListView
+        {
+            X = 2,
+            Y = 12,
+            Width = 28,
+            Height = 7,
+            BorderStyle = LineStyle.Single,
+            Title = "未使用",
+            ViewportSettings = ViewportSettingsFlags.HasVerticalScrollBar
+        };
+        _availableStatusElements.SetSource(new ObservableCollection<string>(available.Select(StatusBarLayout.GetDisplayName)));
+        _selectedStatusElements = new GuiListView
+        {
+            X = 32,
+            Y = 12,
+            Width = Dim.Fill(3),
+            Height = 7,
+            BorderStyle = LineStyle.Single,
+            Title = "当前层",
+            ViewportSettings = ViewportSettingsFlags.HasVerticalScrollBar
+        };
+        _selectedStatusElements.SetSource(new ObservableCollection<string>(GetEditingStatusBarRow().Select(StatusBarLayout.GetDisplayName)));
+        _availableStatusElements.KeyDown += (_, key) =>
+        {
+            if (key == Key.Enter)
+            {
+                AddSelectedStatusElement();
+                key.Handled = true;
+            }
+        };
+        _selectedStatusElements.KeyDown += (_, key) =>
+        {
+            if (key == Key.DeleteChar)
+            {
+                RemoveSelectedStatusElement();
+                key.Handled = true;
+            }
+            else if (key == Key.PageUp)
+            {
+                MoveSelectedStatusElement(-1);
+                key.Handled = true;
+            }
+            else if (key == Key.PageDown)
+            {
+                MoveSelectedStatusElement(1);
+                key.Handled = true;
+            }
+        };
+
+        var add = CreateStatusBarEditorButton("添加 (Enter)", 2, 20, AddSelectedStatusElement);
+        var remove = CreateStatusBarEditorButton("移除 (Del)", 18, 20, RemoveSelectedStatusElement);
+        var up = CreateStatusBarEditorButton("上移 (PgUp)", 34, 20, () => MoveSelectedStatusElement(-1));
+        var down = CreateStatusBarEditorButton("下移 (PgDn)", 50, 20, () => MoveSelectedStatusElement(1));
+        var save = CreateStatusBarEditorButton("保存 (Ctrl+S)", 2, 22, SaveStatusBarDraft);
+        var exit = CreateStatusBarEditorButton("退出 (Esc)", 20, 22, ConfirmExitStatusBarEditor);
+        foreach (var control in new GuiView[] { firstRowButton, secondRowButton, _availableStatusElements, _selectedStatusElements, add, remove, up, down, save, exit })
+        {
+            ConfigurePanelNavigation(control);
+        }
+
+        _contentArea.Add(header, hint, firstPreviewLabel, previewFirst, secondPreviewLabel, previewSecond, firstRowButton, secondRowButton,
+            availableHeader, selectedHeader, _availableStatusElements, _selectedStatusElements, add, remove, up, down, save, exit);
+    }
+
+    private SpectrumStatusBarView CreateStatusBarPreview(IReadOnlyList<StatusBarElement> elements, int y)
+    {
+        var preview = new SpectrumStatusBarView
+        {
+            X = 2,
+            Y = y,
+            Width = Dim.Fill(3),
+            Height = 1
+        };
+        preview.SetElements(elements);
+        preview.SetContent(StatusBarContent.Preview);
+        preview.SetBandCount(_displayOptions.SpectrumBandCount);
+        preview.SetColorMode(_displayOptions.SpectrumColorMode);
+        preview.SetSpectrum(new SpectrumFrame([0.2f, 0.5f, 0.7f, 0.4f, 0.9f, 0.3f, 0.6f, 0.8f]));
+        return preview;
+    }
+
+    private GuiButton CreateStatusBarEditorButton(string text, int x, int y, Action action)
+    {
+        var button = new GuiButton { Text = text, X = x, Y = y, Width = 15 };
+        button.Accepted += (_, _) => action();
+        return button;
+    }
+
+    private void SelectStatusBarEditingRow(int row)
+    {
+        _editingStatusBarRow = row;
+        SwitchCategory(2);
+    }
+
+    private List<StatusBarElement> GetEditingStatusBarRow() =>
+        _editingStatusBarRow == 0 ? _statusBarDraftFirstRow : _statusBarDraftSecondRow;
+
+    private void AddSelectedStatusElement()
+    {
+        var index = _availableStatusElements?.SelectedItem ?? -1;
+        var used = _statusBarDraftFirstRow.Concat(_statusBarDraftSecondRow).ToHashSet();
+        var available = StatusBarLayout.AllElements.Where(candidate => !used.Contains(candidate)).ToList();
+        if (index < 0 || index >= available.Count)
+        {
+            return;
+        }
+
+        GetEditingStatusBarRow().Add(available[index]);
+        SwitchCategory(2);
+    }
+
+    private void RemoveSelectedStatusElement()
+    {
+        var index = _selectedStatusElements?.SelectedItem ?? -1;
+        var row = GetEditingStatusBarRow();
+        if (index < 0 || index >= row.Count)
+        {
+            return;
+        }
+
+        row.RemoveAt(index);
+        SwitchCategory(2);
+    }
+
+    private void MoveSelectedStatusElement(int offset)
+    {
+        var index = _selectedStatusElements?.SelectedItem ?? -1;
+        var row = GetEditingStatusBarRow();
+        var target = index + offset;
+        if (index < 0 || target < 0 || target >= row.Count)
+        {
+            return;
+        }
+
+        (row[index], row[target]) = (row[target], row[index]);
+        SwitchCategory(2);
+    }
+
+    private void SaveStatusBarDraft()
+    {
+        var layout = StatusBarLayout.Normalize(_statusBarDraftFirstRow, _statusBarDraftSecondRow, useDefaultWhenEmpty: false);
+        var settings = BuildCurrentSettings();
+        settings.StatusBarFirstRow = layout.FirstRow;
+        settings.StatusBarSecondRow = layout.SecondRow;
+        _settingsStore.Save(settings);
+        ExitStatusBarEditing();
+    }
+
+    private void ConfirmExitStatusBarEditor()
+    {
+        var result = GuiMessageBox.Query(_app, "退出状态栏编辑", "是否保存布局修改？", "保存", "放弃", "继续编辑");
+        if (result == 0)
+        {
+            SaveStatusBarDraft();
+        }
+        else if (result == 1)
+        {
+            _statusBarDraftFirstRow = [.. _statusBarOriginalFirstRow];
+            _statusBarDraftSecondRow = [.. _statusBarOriginalSecondRow];
+            ExitStatusBarEditing();
+        }
+    }
+
+    private void ExitStatusBarEditing()
+    {
+        _isEditingStatusBar = false;
+        _setStatusBarEditing(false);
+        SwitchCategory(2);
+    }
+
+    private static string FormatStatusBarRow(IReadOnlyList<StatusBarElement> row) =>
+        row.Count == 0 ? "（空）" : string.Join("、", row.Select(StatusBarLayout.GetDisplayName));
 
     #endregion
 

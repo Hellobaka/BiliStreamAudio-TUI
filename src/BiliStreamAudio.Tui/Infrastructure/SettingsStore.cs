@@ -30,10 +30,18 @@ public sealed class SettingsStore : ISettingsStore
         var existing = _collection.FindById(1);
         if (existing is not null)
         {
+            var needsLayoutMigration = existing.StatusBarLayoutVersion is null;
+            NormalizeStatusBarLayout(existing);
+            if (needsLayoutMigration)
+            {
+                _collection.Upsert(existing);
+            }
+
             return existing;
         }
 
         var defaults = new AppSettings();
+        NormalizeStatusBarLayout(defaults);
         _collection.Insert(defaults);
         return defaults;
     }
@@ -41,8 +49,20 @@ public sealed class SettingsStore : ISettingsStore
     public void Save(AppSettings settings)
     {
         settings.Id = 1;
+        NormalizeStatusBarLayout(settings);
         _collection.Upsert(settings);
     }
 
     public void Dispose() => _db.Dispose();
+
+    private static void NormalizeStatusBarLayout(AppSettings settings)
+    {
+        var layout = StatusBarLayout.Normalize(
+            settings.StatusBarFirstRow,
+            settings.StatusBarSecondRow,
+            settings.StatusBarLayoutVersion is null);
+        settings.StatusBarFirstRow = layout.FirstRow;
+        settings.StatusBarSecondRow = layout.SecondRow;
+        settings.StatusBarLayoutVersion = 1;
+    }
 }

@@ -227,6 +227,8 @@ internal sealed class LiveRoomWindow : ApplicationWindow
 
     public bool IsInputFocused => _input.HasFocus;
 
+    public RoomSession Session => _session;
+
     public void FocusInput() => _input.SetFocus();
 
     public void RefreshDisplay()

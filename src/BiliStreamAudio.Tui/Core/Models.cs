@@ -226,4 +226,8 @@ public sealed class AppSettings
     public int SpectrumBandCount { get; set; } = 8;
     public string SpectrumColorMode { get; set; } = "Rainbow";
     public List<string> DanmakuBlockedList { get; set; } = [];
+    public List<StatusBarElement> StatusBarFirstRow { get; set; } = [];
+    public List<StatusBarElement> StatusBarSecondRow { get; set; } = [];
+    /// <summary>用于区分旧版未保存布局与用户明确保存的空布局。</summary>
+    public int? StatusBarLayoutVersion { get; set; }
 }

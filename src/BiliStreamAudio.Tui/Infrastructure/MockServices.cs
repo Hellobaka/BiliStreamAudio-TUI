@@ -149,6 +149,7 @@ internal sealed class MockAudioPlayer : IAudioPlayer, IAudioSpectrumSource
     private readonly float[] _spectrumMagnitudes = new float[SpectrumSampleCount];
     private readonly System.Threading.Timer _spectrumTimer;
     private float _spectrumPhase;
+    private bool _spectrumEnabled;
 
     public event EventHandler<PlaybackState>? StateChanged;
     public event EventHandler<SpectrumFrame>? SpectrumChanged;
@@ -171,7 +172,7 @@ internal sealed class MockAudioPlayer : IAudioPlayer, IAudioSpectrumSource
         {
             lock (_spectrumLock)
             {
-                return _state == PlaybackState.Playing
+                return _spectrumEnabled && _state == PlaybackState.Playing
                     ? new SpectrumFrame(_spectrumMagnitudes.ToArray())
                     : null;
             }
@@ -196,6 +197,14 @@ internal sealed class MockAudioPlayer : IAudioPlayer, IAudioSpectrumSource
 
     public void ToggleMute() => _muted = !_muted;
 
+    public void SetSpectrumEnabled(bool enabled)
+    {
+        _spectrumEnabled = enabled;
+        _spectrumTimer.Change(
+            enabled && _state == PlaybackState.Playing ? TimeSpan.Zero : Timeout.InfiniteTimeSpan,
+            enabled && _state == PlaybackState.Playing ? TimeSpan.FromMilliseconds(80) : Timeout.InfiniteTimeSpan);
+    }
+
     public void Dispose()
     {
         _spectrumTimer.Dispose();
@@ -210,7 +219,7 @@ internal sealed class MockAudioPlayer : IAudioPlayer, IAudioSpectrumSource
 
         _state = state;
         StateChanged?.Invoke(this, state);
-        if (state == PlaybackState.Playing)
+        if (state == PlaybackState.Playing && _spectrumEnabled)
         {
             _spectrumTimer.Change(TimeSpan.Zero, TimeSpan.FromMilliseconds(80));
         }
@@ -223,7 +232,7 @@ internal sealed class MockAudioPlayer : IAudioPlayer, IAudioSpectrumSource
 
     private void UpdateSpectrum(object? state)
     {
-        if (_state != PlaybackState.Playing)
+        if (_state != PlaybackState.Playing || !_spectrumEnabled)
         {
             return;
         }

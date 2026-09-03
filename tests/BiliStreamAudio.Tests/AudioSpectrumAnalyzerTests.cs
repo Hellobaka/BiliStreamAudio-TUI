@@ -6,6 +6,21 @@ namespace BiliStreamAudio.Tests;
 public sealed class AudioSpectrumAnalyzerTests
 {
     [Fact]
+    public async Task Analyzer_does_not_sample_or_emit_when_spectrum_is_disabled()
+    {
+        using var analyzer = new AudioSpectrumAnalyzer();
+        var emitted = false;
+        analyzer.SpectrumChanged += (_, _) => emitted = true;
+
+        analyzer.Start();
+        analyzer.PushPcm16Stereo(CreateStereoSineWave(440, 0.8, 4_096), 4_096 * 4);
+        await Task.Delay(TimeSpan.FromMilliseconds(150));
+
+        Assert.False(emitted);
+        Assert.Null(analyzer.CurrentSpectrum);
+    }
+
+    [Fact]
     public async Task Analyzer_emits_normalized_frequency_bands_from_pcm()
     {
         using var analyzer = new AudioSpectrumAnalyzer();
@@ -18,6 +33,7 @@ public sealed class AudioSpectrumAnalyzerTests
             }
         };
 
+        analyzer.SetSpectrumEnabled(true);
         analyzer.Start();
         analyzer.PushPcm16Stereo(CreateStereoSineWave(440, 0.8, 4_096), 4_096 * 4);
 

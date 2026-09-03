@@ -25,6 +25,7 @@ internal sealed class AudioSpectrumAnalyzer : IAudioSpectrumSource, IDisposable
     private int _sampleCount;
     private int _calculating;
     private bool _started;
+    private bool _enabled;
 
     public AudioSpectrumAnalyzer()
     {
@@ -34,6 +35,31 @@ internal sealed class AudioSpectrumAnalyzer : IAudioSpectrumSource, IDisposable
     public event EventHandler<SpectrumFrame>? SpectrumChanged;
 
     public SpectrumFrame? CurrentSpectrum { get; private set; }
+
+    public void SetSpectrumEnabled(bool enabled) => SetEnabled(enabled);
+
+    public void SetEnabled(bool enabled)
+    {
+        bool shouldRun;
+        lock (_sync)
+        {
+            if (_enabled == enabled)
+            {
+                return;
+            }
+
+            _enabled = enabled;
+            if (!enabled)
+            {
+                _sampleCount = 0;
+                CurrentSpectrum = null;
+            }
+
+            shouldRun = enabled && _started;
+        }
+
+        _timer.Change(shouldRun ? 0 : Timeout.Infinite, shouldRun ? UpdateIntervalMilliseconds : Timeout.Infinite);
+    }
 
     public void Start()
     {
@@ -47,7 +73,10 @@ internal sealed class AudioSpectrumAnalyzer : IAudioSpectrumSource, IDisposable
             _started = true;
         }
 
-        _timer.Change(0, UpdateIntervalMilliseconds);
+        if (_enabled)
+        {
+            _timer.Change(0, UpdateIntervalMilliseconds);
+        }
     }
 
     public void Stop()
@@ -68,7 +97,7 @@ internal sealed class AudioSpectrumAnalyzer : IAudioSpectrumSource, IDisposable
     {
         lock (_sync)
         {
-            if (!_started)
+            if (!_started || !_enabled)
             {
                 return;
             }
@@ -107,7 +136,7 @@ internal sealed class AudioSpectrumAnalyzer : IAudioSpectrumSource, IDisposable
         var previousMagnitudes = new float[OutputBandCount];
         lock (_sync)
         {
-            if (!_started || _sampleCount < WindowSize)
+            if (!_started || !_enabled || _sampleCount < WindowSize)
             {
                 return;
             }
@@ -144,7 +173,7 @@ internal sealed class AudioSpectrumAnalyzer : IAudioSpectrumSource, IDisposable
         var spectrum = new SpectrumFrame(magnitudes);
         lock (_sync)
         {
-            if (!_started)
+            if (!_started || !_enabled)
             {
                 return;
             }
