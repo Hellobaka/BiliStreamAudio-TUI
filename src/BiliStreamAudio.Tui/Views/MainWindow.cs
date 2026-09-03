@@ -26,7 +26,8 @@ internal sealed class MainWindow : Window
         IDanmakuSender sender,
         IHistoryStore history,
         bool mockMode,
-        LiveRoomDisplayOptions liveRoomDisplayOptions)
+        LiveRoomDisplayOptions liveRoomDisplayOptions,
+        ISettingsStore settingsStore)
     {
         Title = mockMode ? "BiliStreamAudio-TUI（模拟模式）" : "BiliStreamAudio-TUI";
         X = 0;
@@ -67,16 +68,16 @@ internal sealed class MainWindow : Window
         };
         Browse = new BrowseWindow(app, directory, rooms, session, ShowLiveRoom);
         var playbackHistory = new PlaybackHistoryWindow(app, history, rooms, session, ShowLiveRoom);
-        var settings = new SettingsWindow(liveRoomDisplayOptions, () =>
+        Settings = new SettingsWindow(app, liveRoomDisplayOptions, () =>
         {
             LiveRoom.RefreshDisplay();
             RefreshStatusBar();
-        });
+        }, auth, tokenRefresh, settingsStore);
         _tabs.Add(
             LiveRoom,
             Browse,
             playbackHistory,
-            settings);
+            Settings);
         _tabs.ValueChanged += (_, args) =>
         {
             if (ReferenceEquals(args.NewValue, playbackHistory))
@@ -109,7 +110,9 @@ internal sealed class MainWindow : Window
 
     public BrowseWindow Browse { get; }
 
-    public bool IsTextInputFocused => LiveRoom.IsInputFocused || Browse.IsSearchInputFocused;
+    public SettingsWindow Settings { get; } = null!;
+
+    public bool IsTextInputFocused => LiveRoom.IsInputFocused || Browse.IsSearchInputFocused || Settings.IsTextInputFocused;
 
     public void SelectPreviousTab() => SelectTab(-1);
 

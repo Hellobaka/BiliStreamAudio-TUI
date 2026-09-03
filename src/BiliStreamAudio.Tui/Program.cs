@@ -54,6 +54,9 @@ internal static class Program
         IHistoryStore history;
         BiliHttp? http = null;
 
+        var settingsStore = new SettingsStore();
+        var liveRoomDisplayOptions = new LiveRoomDisplayOptions();
+
         if (mockMode)
         {
             auth = new MockAuthService();
@@ -87,7 +90,6 @@ internal static class Program
         app.Init();
 
         var session = new RoomSession(rooms, streams, audio, danmaku, history);
-        var liveRoomDisplayOptions = new LiveRoomDisplayOptions();
         var mainWindow = new MainWindow(
             app,
             session,
@@ -100,18 +102,24 @@ internal static class Program
             sender,
             history,
             mockMode,
-            liveRoomDisplayOptions);
+            liveRoomDisplayOptions,
+            settingsStore);
 
         app.Keyboard.KeyDown += (_, key) =>
         {
+            // Ctrl+Q remains available even when a text field owns the keyboard focus.
+            if (key == Key.Q.WithCtrl)
+            {
+                app.RequestStop(mainWindow);
+                key.Handled = true;
+            }
             // Application-level handling runs before the focused TextField consumes printable keys.
-            // Q/E must remain normal input while the live room input has focus.
-            if (mainWindow.IsTextInputFocused)
+            // Q/E must remain normal input while a text field has focus.
+            else if (mainWindow.IsTextInputFocused)
             {
                 return;
             }
-
-            if (key == Key.Q || key == Key.Q.WithShift)
+            else if (key == Key.Q || key == Key.Q.WithShift)
             {
                 mainWindow.SelectPreviousTab();
                 key.Handled = true;
@@ -119,11 +127,6 @@ internal static class Program
             else if (key == Key.E || key == Key.E.WithShift)
             {
                 mainWindow.SelectNextTab();
-                key.Handled = true;
-            }
-            else if (key == Key.Q.WithCtrl)
-            {
-                app.RequestStop(mainWindow);
                 key.Handled = true;
             }
         };
@@ -136,6 +139,7 @@ internal static class Program
 
         session.DisposeAsync().AsTask().GetAwaiter().GetResult();
         history.Dispose();
+        settingsStore.Dispose();
         http?.Dispose();
     }
 

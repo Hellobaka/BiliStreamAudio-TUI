@@ -22,6 +22,27 @@ public sealed class LiveRoomDisplayOptions
     public string DanmakuBlockedWords { get; set; } = string.Empty;
 
     /// <summary>
+    /// 屏蔽词列表形式，与 <see cref="DanmakuBlockedWords"/> 双向同步。
+    /// </summary>
+    public List<string> DanmakuBlockedList { get; set; } = [];
+
+    /// <summary>
+    /// 从 <see cref="DanmakuBlockedWords"/> 解析屏蔽词列表。
+    /// </summary>
+    public void SyncBlockedListFromWords()
+    {
+        DanmakuBlockedList = [.. GetDanmakuBlockedWords()];
+    }
+
+    /// <summary>
+    /// 将 <see cref="DanmakuBlockedList"/> 序列化回 <see cref="DanmakuBlockedWords"/>。
+    /// </summary>
+    public void SyncWordsFromBlockedList()
+    {
+        DanmakuBlockedWords = string.Join(", ", DanmakuBlockedList);
+    }
+
+    /// <summary>
     /// 是否显示普通弹幕。
     /// </summary>
     public bool ShowDanmaku { get; set; } = true;
@@ -79,7 +100,7 @@ public sealed class LiveRoomDisplayOptions
             !message.Contains(word, StringComparison.OrdinalIgnoreCase));
     }
 
-    private IEnumerable<string> GetDanmakuBlockedWords() => DanmakuBlockedWords.Split(
+    public IEnumerable<string> GetDanmakuBlockedWords() => DanmakuBlockedWords.Split(
         ['\r', '\n', ',', '，', ';', '；'],
         StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 }

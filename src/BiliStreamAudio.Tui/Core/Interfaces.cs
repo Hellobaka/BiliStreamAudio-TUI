@@ -94,6 +94,12 @@ public interface IHistoryStore : IDisposable
     void DeletePlayback(long roomId);
 }
 
+public interface ISettingsStore : IDisposable
+{
+    AppSettings Load();
+    void Save(AppSettings settings);
+}
+
 public interface IAudioPlayer : IDisposable
 {
     event EventHandler<PlaybackState>? StateChanged;

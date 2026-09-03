@@ -212,3 +212,17 @@ public sealed record RefreshResult(bool Success, AuthSession? Session, string? E
 {
     public static RefreshResult Failed(string message) => new(false, null, message);
 }
+
+public sealed class AppSettings
+{
+    public int Id { get; set; } = 1;
+    public bool ShowDanmaku { get; set; } = true;
+    public bool ShowSuperChats { get; set; } = true;
+    public bool ShowGifts { get; set; } = true;
+    public bool ShowGuards { get; set; } = true;
+    public bool ShowGiftAmount { get; set; } = true;
+    public bool ShowFanMedals { get; set; } = true;
+    public int SpectrumBandCount { get; set; } = 8;
+    public string SpectrumColorMode { get; set; } = "Rainbow";
+    public List<string> DanmakuBlockedList { get; set; } = [];
+}
