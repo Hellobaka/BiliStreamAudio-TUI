@@ -1,13 +1,21 @@
 using System.Collections.ObjectModel;
 using System.Text;
 using BiliStreamAudio.Tui.Core;
+using BiliStreamAudio.Tui.Infrastructure;
 using Serilog;
 using Terminal.Gui.App;
+using Terminal.Gui.Drawing;
 using Terminal.Gui.Input;
+using Terminal.Gui.Text;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
+using GuiAttribute = Terminal.Gui.Drawing.Attribute;
+using GuiButton = Terminal.Gui.Views.Button;
+using GuiColor = Terminal.Gui.Drawing.Color;
 using GuiLabel = Terminal.Gui.Views.Label;
+using GuiLine = Terminal.Gui.Views.Line;
 using GuiListView = Terminal.Gui.Views.ListView;
+using GuiView = Terminal.Gui.ViewBase.View;
 
 namespace BiliStreamAudio.Tui.Views;
 
@@ -25,13 +33,27 @@ internal sealed class LiveRoomWindow : Window
     private readonly IAudioPlayer _audio;
     private readonly IDanmakuSender _sender;
     private readonly IHistoryStore _history;
+    private readonly bool _mockMode;
     private readonly Action _refreshStatusBar;
+    private static readonly Scheme SuperChatScrollButtonScheme = new(
+        new GuiAttribute(GuiColor.White, GuiColor.None))
+    {
+        Disabled = new GuiAttribute(GuiColor.DarkGray, GuiColor.None)
+    };
     private readonly GuiLabel _header;
+    private readonly GuiView _superChatTray;
+    private readonly GuiButton _scrollSuperChatsLeft;
+    private readonly GuiButton _scrollSuperChatsRight;
+    private readonly GuiView _superChatCapsules;
+    private readonly GuiLine _superChatSeparator;
+    private readonly ExpandedSuperChatCardView _expandedSuperChatCard;
     private readonly GuiListView _messages;
     private readonly TextField _input;
     private readonly GuiLabel _inputStatus;
     private readonly ObservableCollection<DanmakuListItem> _messageItems = [];
     private readonly List<PendingDanmaku> _pendingDanmaku = [];
+    private readonly List<ActiveSuperChat> _activeSuperChats = [];
+    private readonly HashSet<string> _seenSuperChatIds = new(StringComparer.Ordinal);
     private long? _currentRoomId;
     private string _sessionStatus = "已停止";
     private DateTimeOffset? _cooldownEndsAt;
@@ -39,6 +61,10 @@ internal sealed class LiveRoomWindow : Window
     private List<string> _danmakuHistory = [];
     private int _danmakuHistoryIndex = -1;
     private string? _danmakuHistoryDraft;
+    private int _firstVisibleSuperChat;
+    private int _lastVisibleSuperChat = -1;
+    private object? _superChatTimerToken;
+    private SuperChatEvent? _expandedSuperChat;
 
     public LiveRoomWindow(
         IApplication app,
@@ -49,6 +75,7 @@ internal sealed class LiveRoomWindow : Window
         IDanmakuConnection danmaku,
         IDanmakuSender sender,
         IHistoryStore history,
+        bool mockMode,
         Action refreshStatusBar)
     {
         _app = app;
@@ -58,6 +85,7 @@ internal sealed class LiveRoomWindow : Window
         _audio = audio;
         _sender = sender;
         _history = history;
+        _mockMode = mockMode;
         _refreshStatusBar = refreshStatusBar;
 
         Title = "直播间";
@@ -69,12 +97,79 @@ internal sealed class LiveRoomWindow : Window
             Y = 0,
             Width = Dim.Fill(2)
         };
+        _superChatTray = new GuiView
+        {
+            X = 1,
+            Y = 2,
+            Width = Dim.Fill(2),
+            Height = 2,
+            Visible = false
+        };
+        _scrollSuperChatsLeft = new GuiButton
+        {
+            Text = "◀",
+            X = 0,
+            Y = 0,
+            Width = 3,
+            NoDecorations = true,
+            NoPadding = true,
+            BorderStyle = LineStyle.None,
+            ShadowStyle = ShadowStyles.None,
+            Enabled = false
+        };
+        _scrollSuperChatsLeft.SetScheme(SuperChatScrollButtonScheme);
+        _superChatCapsules = new GuiView
+        {
+            X = 4,
+            Y = 0,
+            Width = Dim.Fill(4),
+            Height = 1
+        };
+        _scrollSuperChatsRight = new GuiButton
+        {
+            Text = "▶",
+            X = Pos.AnchorEnd(3),
+            Y = 0,
+            Width = 3,
+            NoDecorations = true,
+            NoPadding = true,
+            BorderStyle = LineStyle.None,
+            ShadowStyle = ShadowStyles.None,
+            Enabled = false
+        };
+        _scrollSuperChatsRight.SetScheme(SuperChatScrollButtonScheme);
+        _superChatSeparator = new GuiLine
+        {
+            X = 0,
+            Y = 1,
+            Style = LineStyle.Single
+        };
+        _superChatTray.Add(
+            _scrollSuperChatsLeft,
+            _superChatCapsules,
+            _scrollSuperChatsRight,
+            _superChatSeparator);
+        _superChatCapsules.ViewportChanged += (_, _) =>
+        {
+            if (_activeSuperChats.Count > 0)
+            {
+                RenderSuperChatCapsules();
+            }
+        };
+        _expandedSuperChatCard = new ExpandedSuperChatCardView(HideExpandedSuperChat)
+        {
+            X = 1,
+            Y = 4,
+            Width = Dim.Fill(2),
+            Height = 3,
+            Visible = false
+        };
         _messages = new GuiListView
         {
             X = 1,
             Y = 2,
             Width = Dim.Fill(2),
-            Height = Dim.Fill(4),
+            Height = Dim.Fill(7),
             ViewportSettings = ViewportSettingsFlags.HasVerticalScrollBar
         };
         _messages.SetSource(_messageItems);
@@ -91,12 +186,24 @@ internal sealed class LiveRoomWindow : Window
             Y = Pos.AnchorEnd(1),
             Width = Dim.Fill(2)
         };
-        Add(_header, _messages, _input, _inputStatus);
+        Add(_header, _superChatTray, _expandedSuperChatCard, _messages, _input, _inputStatus);
+        ViewportChanged += (_, _) => RefreshExpandedSuperChatCard();
+        _app.Mouse.MouseEvent += (_, mouse) =>
+        {
+            if (_expandedSuperChat is not null
+                && mouse.Flags.HasFlag(MouseFlags.LeftButtonClicked)
+                && mouse.View is not SuperChatCapsuleView)
+            {
+                HideExpandedSuperChat();
+            }
+        };
         ConfigureEvents(danmaku);
         RefreshHeader();
     }
 
     public bool IsInputFocused => _input.HasFocus;
+
+    public void FocusInput() => _input.SetFocus();
 
     private void OnRoomChanged(LiveRoom room)
     {
@@ -108,6 +215,7 @@ internal sealed class LiveRoomWindow : Window
         _currentRoomId = room.RoomId;
         LoadDanmakuHistory(room.RoomId);
         RefreshHeader();
+        _input.SetFocus();
     }
 
     private void LoadDanmakuHistory(long roomId)
@@ -137,6 +245,7 @@ internal sealed class LiveRoomWindow : Window
         }
 
         _pendingDanmaku.Clear();
+        ClearSuperChats();
         _messageItems.Clear();
         _messages.SetNeedsDraw();
     }
@@ -175,6 +284,13 @@ internal sealed class LiveRoomWindow : Window
 
     private void ConfigureEvents(IDanmakuConnection danmaku)
     {
+        danmaku.EventReceived += (_, item) =>
+        {
+            if (item is SuperChatEvent or SuperChatDeleteEvent)
+            {
+                _app.Invoke(() => HandleLiveEvent(item));
+            }
+        };
         danmaku.Received += (_, item) => _app.Invoke(() =>
         {
             if (!TryConfirmDanmaku(item))
@@ -196,6 +312,11 @@ internal sealed class LiveRoomWindow : Window
         _input.TextChanging += (_, args) =>
         {
             var proposedText = args.Result ?? string.Empty;
+            if (_mockMode && MockSuperChatCommand.IsCommand(proposedText))
+            {
+                return;
+            }
+
             if (CountDanmakuCharacters(proposedText) <= MaximumDanmakuLength)
             {
                 return;
@@ -208,6 +329,13 @@ internal sealed class LiveRoomWindow : Window
 
         _input.KeyDown += (_, key) =>
         {
+            if (key == Key.Esc && _expandedSuperChat is not null)
+            {
+                HideExpandedSuperChat();
+                key.Handled = true;
+                return;
+            }
+
             if (key == Key.CursorUp || key == Key.CursorDown)
             {
                 NavigateDanmakuHistory(key == Key.CursorUp ? -1 : 1);
@@ -226,6 +354,13 @@ internal sealed class LiveRoomWindow : Window
                 var value = _input.Text.ToString() ?? string.Empty;
                 _input.Text = string.Empty;
                 _input.HasFocus = true;
+                if (_mockMode && MockSuperChatCommand.IsCommand(value))
+                {
+                    _ = SendMockSuperChatAsync(room.RoomId, value);
+                    key.Handled = true;
+                    return;
+                }
+
                 StartSendCooldown();
                 var pending = StartDanmakuSend(value);
                 _ = SendDanmakuWithFeedbackAsync(room.RoomId, value, pending);
@@ -238,9 +373,36 @@ internal sealed class LiveRoomWindow : Window
             key.Handled = true;
         };
 
+        _scrollSuperChatsLeft.Accepted += (_, _) => ScrollSuperChats(-1);
+        _scrollSuperChatsRight.Accepted += (_, _) => ScrollSuperChats(1);
+        _messages.RowRender += (_, args) =>
+        {
+            if (args.Row >= 0
+                && args.Row < _messageItems.Count
+                && _messageItems[args.Row].SuperChatTier is { } tier)
+            {
+                args.RowAttribute = GetSuperChatPalette(tier).Card;
+            }
+        };
+        _messages.Accepted += (_, _) =>
+        {
+            if (_messages.SelectedItem is { } index
+                && index >= 0
+                && index < _messageItems.Count
+                && _messageItems[index].SuperChat is { } superChat)
+            {
+                ShowExpandedSuperChat(superChat);
+            }
+        };
+
         KeyDown += (_, key) =>
         {
-            if (key == Key.R || key == Key.R.WithShift)
+            if (key == Key.Esc && _expandedSuperChat is not null)
+            {
+                HideExpandedSuperChat();
+                key.Handled = true;
+            }
+            else if (key == Key.R || key == Key.R.WithShift)
             {
                 _ = RunUiTask(
                     () => _session.RefreshAsync(CancellationToken.None),
@@ -299,6 +461,19 @@ internal sealed class LiveRoomWindow : Window
 
         await _auth.SaveAsync(result.Session, CancellationToken.None).ConfigureAwait(false);
         await _sender.SendAsync(roomId, text, result.Session, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private async Task SendMockSuperChatAsync(long roomId, string text)
+    {
+        try
+        {
+            await SendDanmakuAsync(roomId, text).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            Log.Error(exception, "Mock Super Chat send failed");
+            AddMessage($"SC 模拟失败：{exception.ToDisplayText()}");
+        }
     }
 
     private async Task SendDanmakuWithFeedbackAsync(long roomId, string text, PendingDanmaku pending)
@@ -529,7 +704,10 @@ internal sealed class LiveRoomWindow : Window
         }
         else if (_session.Room is not null && _auth.Current?.IsAuthenticated == true)
         {
-            _inputStatus.Text = $"{CountDanmakuCharacters(_input.Text.ToString() ?? string.Empty)}/{MaximumDanmakuLength}";
+            var inputText = _input.Text.ToString() ?? string.Empty;
+            _inputStatus.Text = _mockMode && MockSuperChatCommand.IsCommand(inputText)
+                ? "Mock SC：sc:<金额> <正文>"
+                : $"{CountDanmakuCharacters(inputText)}/{MaximumDanmakuLength}";
         }
         else
         {
@@ -552,6 +730,408 @@ internal sealed class LiveRoomWindow : Window
         return result.ToString();
     }
 
+    private void HandleLiveEvent(LiveEvent item)
+    {
+        switch (item)
+        {
+            case SuperChatEvent superChat:
+                AddSuperChat(superChat);
+                break;
+            case SuperChatDeleteEvent deleted:
+                RemoveSuperChatCapsules(deleted.Ids);
+                break;
+        }
+    }
+
+    private void AddSuperChat(SuperChatEvent superChat)
+    {
+        if (!string.IsNullOrEmpty(superChat.Id) && !_seenSuperChatIds.Add(superChat.Id))
+        {
+            return;
+        }
+
+        AddSuperChatCard(superChat);
+        var lifetime = SuperChatPresentation.GetLifetime(superChat.PriceCny);
+        if (lifetime <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        var displayedAt = DateTimeOffset.Now;
+        _activeSuperChats.Add(new ActiveSuperChat(
+            superChat,
+            displayedAt,
+            displayedAt.Add(lifetime)));
+        UpdateSuperChatLayout();
+        EnsureNewestSuperChatsVisible();
+        RenderSuperChatCapsules();
+        StartSuperChatTimer();
+    }
+
+    private void AddSuperChatCard(SuperChatEvent superChat)
+    {
+        var width = _messages.Viewport.Width > 16 ? _messages.Viewport.Width : 60;
+        var tier = SuperChatPresentation.GetTier(superChat.PriceCny);
+        foreach (var line in FormatSuperChatCard(superChat, width))
+        {
+            _messageItems.Add(new DanmakuListItem(
+                Guid.NewGuid(),
+                line,
+                superChat,
+                tier));
+        }
+
+        while (_messageItems.Count > MaximumMessageCount)
+        {
+            _messageItems.RemoveAt(0);
+        }
+
+        _messages.MoveEnd(extend: false);
+    }
+
+    internal static IReadOnlyList<string> FormatSuperChatCard(
+        SuperChatEvent superChat,
+        int availableWidth)
+    {
+        var width = Math.Max(16, availableWidth);
+        var userName = string.IsNullOrWhiteSpace(superChat.UserName)
+            ? "匿名用户"
+            : superChat.UserName;
+        var heading = $" SC ¥{superChat.PriceCny} · {userName} ";
+        var lines = new List<string>
+        {
+            $"┌{FitToColumns(heading, width - 2, '─')}┐"
+        };
+        foreach (var contentLine in WrapText(superChat.Message, width - 4))
+        {
+            lines.Add($"│ {FitToColumns(contentLine, width - 4, ' ')} │");
+        }
+        lines.Add($"└{new string('─', width - 2)}┘");
+        return lines;
+    }
+
+    internal static string FormatSuperChatDetails(SuperChatEvent superChat)
+    {
+        var userName = string.IsNullOrWhiteSpace(superChat.UserName)
+            ? "匿名用户"
+            : superChat.UserName;
+        return $"发送人：{userName}\n金额：¥{superChat.PriceCny}\n\n{superChat.Message}";
+    }
+
+    private static IReadOnlyList<string> WrapText(string text, int width)
+    {
+        width = Math.Max(1, width);
+        var lines = new List<string>();
+        var current = new StringBuilder();
+        var currentWidth = 0;
+        foreach (var rune in text.EnumerateRunes())
+        {
+            if (rune.Value == '\r')
+            {
+                continue;
+            }
+            if (rune.Value == '\n')
+            {
+                lines.Add(current.ToString());
+                current.Clear();
+                currentWidth = 0;
+                continue;
+            }
+
+            var runeWidth = Math.Max(1, rune.GetColumns());
+            if (currentWidth > 0 && currentWidth + runeWidth > width)
+            {
+                lines.Add(current.ToString());
+                current.Clear();
+                currentWidth = 0;
+            }
+
+            current.Append(rune);
+            currentWidth += runeWidth;
+        }
+
+        if (current.Length > 0 || lines.Count == 0)
+        {
+            lines.Add(current.ToString());
+        }
+
+        return lines;
+    }
+
+    private static string FitToColumns(string value, int width, char padding)
+    {
+        var result = new StringBuilder();
+        var used = 0;
+        foreach (var rune in value.EnumerateRunes())
+        {
+            var runeWidth = Math.Max(1, rune.GetColumns());
+            if (used + runeWidth > width)
+            {
+                break;
+            }
+
+            result.Append(rune);
+            used += runeWidth;
+        }
+
+        if (used < width)
+        {
+            result.Append(padding, width - used);
+        }
+
+        return result.ToString();
+    }
+
+    private void RemoveSuperChatCapsules(IReadOnlyList<string> ids)
+    {
+        if (ids.Count == 0)
+        {
+            return;
+        }
+
+        var deletedIds = ids.ToHashSet(StringComparer.Ordinal);
+        if (_activeSuperChats.RemoveAll(item => deletedIds.Contains(item.SuperChat.Id)) == 0)
+        {
+            return;
+        }
+
+        ClampSuperChatViewport();
+        RenderSuperChatCapsules();
+    }
+
+    private void StartSuperChatTimer()
+    {
+        if (_superChatTimerToken is not null)
+        {
+            return;
+        }
+
+        _superChatTimerToken = _app.AddTimeout(TimeSpan.FromSeconds(1), () =>
+        {
+            var now = DateTimeOffset.Now;
+            var removed = _activeSuperChats.RemoveAll(item => item.ExpiresAt <= now) > 0;
+            if (removed)
+            {
+                ClampSuperChatViewport();
+                RenderSuperChatCapsules();
+            }
+            else
+            {
+                foreach (var item in _activeSuperChats)
+                {
+                    item.Capsule?.SetRemainingFraction(
+                        SuperChatPresentation.GetRemainingFraction(
+                            now,
+                            item.DisplayedAt,
+                            item.ExpiresAt));
+                }
+            }
+
+            if (_activeSuperChats.Count > 0)
+            {
+                return true;
+            }
+
+            _superChatTimerToken = null;
+            return false;
+        });
+    }
+
+    private void ClearSuperChats()
+    {
+        if (_superChatTimerToken is { } timerToken)
+        {
+            _app.RemoveTimeout(timerToken);
+            _superChatTimerToken = null;
+        }
+
+        _activeSuperChats.Clear();
+        _seenSuperChatIds.Clear();
+        _expandedSuperChat = null;
+        _expandedSuperChatCard.Clear();
+        _firstVisibleSuperChat = 0;
+        _lastVisibleSuperChat = -1;
+        _superChatCapsules.RemoveAll();
+        _scrollSuperChatsLeft.Enabled = false;
+        _scrollSuperChatsRight.Enabled = false;
+        UpdateSuperChatLayout();
+        _superChatCapsules.SetNeedsDraw();
+    }
+
+    private void ScrollSuperChats(int direction)
+    {
+        if (direction < 0 && _firstVisibleSuperChat > 0)
+        {
+            _firstVisibleSuperChat--;
+        }
+        else if (direction > 0 && _lastVisibleSuperChat < _activeSuperChats.Count - 1)
+        {
+            _firstVisibleSuperChat++;
+        }
+
+        RenderSuperChatCapsules();
+    }
+
+    private void EnsureNewestSuperChatsVisible()
+    {
+        var availableWidth = GetCapsuleHostWidth();
+        var start = _activeSuperChats.Count - 1;
+        var used = GetCapsuleWidth(_activeSuperChats[start].SuperChat);
+        while (start > 0)
+        {
+            var previousWidth = GetCapsuleWidth(_activeSuperChats[start - 1].SuperChat);
+            if (used + 1 + previousWidth > availableWidth)
+            {
+                break;
+            }
+
+            start--;
+            used += 1 + previousWidth;
+        }
+
+        _firstVisibleSuperChat = Math.Max(0, start);
+    }
+
+    private void ClampSuperChatViewport()
+    {
+        _firstVisibleSuperChat = _activeSuperChats.Count == 0
+            ? 0
+            : Math.Clamp(_firstVisibleSuperChat, 0, _activeSuperChats.Count - 1);
+    }
+
+    private void RenderSuperChatCapsules()
+    {
+        UpdateSuperChatLayout();
+        _superChatCapsules.RemoveAll();
+        foreach (var item in _activeSuperChats)
+        {
+            item.Capsule = null;
+        }
+
+        ClampSuperChatViewport();
+        var availableWidth = GetCapsuleHostWidth();
+        var x = 0;
+        _lastVisibleSuperChat = _firstVisibleSuperChat - 1;
+        var now = DateTimeOffset.Now;
+        for (var index = _firstVisibleSuperChat; index < _activeSuperChats.Count; index++)
+        {
+            var active = _activeSuperChats[index];
+            var width = Math.Min(GetCapsuleWidth(active.SuperChat), availableWidth - x);
+            if (width < 4 || x > 0 && width < GetCapsuleWidth(active.SuperChat))
+            {
+                break;
+            }
+
+            var capsule = new SuperChatCapsuleView(
+                active.SuperChat,
+                GetSuperChatPalette(SuperChatPresentation.GetTier(active.SuperChat.PriceCny)),
+                () => ShowExpandedSuperChat(active.SuperChat))
+            {
+                X = x,
+                Y = 0,
+                Width = width,
+                Height = 1
+            };
+            capsule.SetRemainingFraction(SuperChatPresentation.GetRemainingFraction(
+                now,
+                active.DisplayedAt,
+                active.ExpiresAt));
+            active.Capsule = capsule;
+            _superChatCapsules.Add(capsule);
+            _lastVisibleSuperChat = index;
+            x += width + 1;
+            if (x >= availableWidth)
+            {
+                break;
+            }
+        }
+
+        _scrollSuperChatsLeft.Enabled = _firstVisibleSuperChat > 0;
+        _scrollSuperChatsRight.Enabled =
+            _lastVisibleSuperChat >= 0
+            && _lastVisibleSuperChat < _activeSuperChats.Count - 1;
+        _superChatCapsules.SetNeedsDraw();
+    }
+
+    private void UpdateSuperChatLayout()
+    {
+        var hasActiveSuperChats = _activeSuperChats.Count > 0;
+        var hasExpandedSuperChat = _expandedSuperChat is not null;
+        var expandedCardHeight = hasExpandedSuperChat ? _expandedSuperChatCard.CardHeight : 0;
+        var superChatTrayHeight = 2 + expandedCardHeight;
+        _superChatTray.Visible = hasActiveSuperChats;
+        _superChatTray.Height = superChatTrayHeight;
+        _superChatSeparator.Y = superChatTrayHeight - 1;
+        _expandedSuperChatCard.Visible = hasExpandedSuperChat;
+        _expandedSuperChatCard.Y = hasActiveSuperChats ? 3 : 2;
+        _messages.Y = hasActiveSuperChats
+            ? 2 + superChatTrayHeight
+            : 2 + expandedCardHeight;
+        SetNeedsLayout();
+        SetNeedsDraw();
+    }
+
+    private int GetCapsuleHostWidth()
+    {
+        var width = _superChatCapsules.Viewport.Width;
+        return Math.Max(4, width > 0 ? width : _superChatCapsules.Frame.Width);
+    }
+
+    private static int GetCapsuleWidth(SuperChatEvent superChat) =>
+        Math.Max(8, $"¥{superChat.PriceCny}".GetColumns() + 4);
+
+    private void ShowExpandedSuperChat(SuperChatEvent superChat)
+    {
+        if (ReferenceEquals(_expandedSuperChat, superChat))
+        {
+            HideExpandedSuperChat();
+            return;
+        }
+
+        _expandedSuperChat = superChat;
+        RefreshExpandedSuperChatCard();
+    }
+
+    private void HideExpandedSuperChat()
+    {
+        if (_expandedSuperChat is null)
+        {
+            return;
+        }
+
+        _expandedSuperChat = null;
+        _expandedSuperChatCard.Clear();
+        UpdateSuperChatLayout();
+        _input.SetFocus();
+    }
+
+    private void RefreshExpandedSuperChatCard()
+    {
+        if (_expandedSuperChat is not { } superChat)
+        {
+            return;
+        }
+
+        var width = _expandedSuperChatCard.Viewport.Width > 16
+            ? _expandedSuperChatCard.Viewport.Width
+            : _messages.Viewport.Width > 16
+                ? _messages.Viewport.Width
+                : 60;
+        var cardY = _activeSuperChats.Count > 0 ? 4 : 2;
+        var maximumHeight = Math.Max(3, Math.Min(10, Viewport.Height - cardY - 8));
+        _expandedSuperChatCard.SetSuperChat(superChat, width, maximumHeight);
+        UpdateSuperChatLayout();
+    }
+
+    private static SuperChatPalette GetSuperChatPalette(SuperChatTier tier) => tier switch
+    {
+        SuperChatTier.LightBlue => new(new GuiColor("#347FA8"), new GuiColor("#A8DCF5")),
+        SuperChatTier.Cyan => new(new GuiColor("#008B8B"), new GuiColor("#8DE5DF")),
+        SuperChatTier.Gold => new(new GuiColor("#A66F00"), new GuiColor("#F2D06B")),
+        SuperChatTier.Red => new(new GuiColor("#B3262E"), new GuiColor("#F59AA0")),
+        _ => new(new GuiColor("#347FA8"), new GuiColor("#A8DCF5"))
+    };
+
     private void AddMessageItem(string text) => UpdateMessageItem(Guid.NewGuid(), text, addIfMissing: true);
 
     private void UpdateMessageItem(Guid id, string text, bool addIfMissing = false)
@@ -563,7 +1143,12 @@ internal sealed class LiveRoomWindow : Window
                 continue;
             }
 
-            _messageItems[index] = new DanmakuListItem(id, text);
+            var existing = _messageItems[index];
+            _messageItems[index] = new DanmakuListItem(
+                id,
+                text,
+                existing.SuperChat,
+                existing.SuperChatTier);
             _messages.SetNeedsDraw();
             return;
         }
@@ -585,11 +1170,157 @@ internal sealed class LiveRoomWindow : Window
     private static string FormatDanmaku(DateTimeOffset receivedAt, string userName, string message) =>
         $"[{receivedAt:HH:mm:ss}] {userName}: {message}";
 
-    private sealed class DanmakuListItem(Guid id, string text)
+    private sealed class DanmakuListItem(
+        Guid id,
+        string text,
+        SuperChatEvent? superChat = null,
+        SuperChatTier? superChatTier = null)
     {
         public Guid Id { get; } = id;
+        public SuperChatEvent? SuperChat { get; } = superChat;
+        public SuperChatTier? SuperChatTier { get; } = superChatTier;
 
         public override string ToString() => text;
+    }
+
+    private sealed class ActiveSuperChat(
+        SuperChatEvent superChat,
+        DateTimeOffset displayedAt,
+        DateTimeOffset expiresAt)
+    {
+        public SuperChatEvent SuperChat { get; } = superChat;
+        public DateTimeOffset DisplayedAt { get; } = displayedAt;
+        public DateTimeOffset ExpiresAt { get; } = expiresAt;
+        public SuperChatCapsuleView? Capsule { get; set; }
+    }
+
+    private sealed record SuperChatPalette(
+        GuiColor DeepBackground,
+        GuiColor LightBackground)
+    {
+        public GuiAttribute Deep { get; } = new(
+            GuiColor.White,
+            DeepBackground,
+            TextStyle.Bold);
+
+        public GuiAttribute Light { get; } = new(
+            GuiColor.Black,
+            LightBackground,
+            TextStyle.Bold);
+
+        public GuiAttribute Card { get; } = new(
+            GuiColor.Black,
+            LightBackground);
+    }
+
+    private sealed class ExpandedSuperChatCardView(Action dismissed) : GuiView
+    {
+        private IReadOnlyList<string> _lines = [];
+        private GuiAttribute _attribute;
+
+        public int CardHeight => _lines.Count;
+
+        public void SetSuperChat(SuperChatEvent superChat, int width, int maximumHeight)
+        {
+            width = Math.Max(16, width);
+            maximumHeight = Math.Max(3, maximumHeight);
+            var lines = FormatSuperChatCard(superChat, width);
+            if (lines.Count > maximumHeight)
+            {
+                var visibleLines = lines.Take(maximumHeight - 2).ToList();
+                visibleLines.Add($"│ {FitToColumns("…", width - 4, ' ')} │");
+                visibleLines.Add(lines[^1]);
+                lines = visibleLines;
+            }
+
+            _lines = lines;
+            _attribute = GetSuperChatPalette(
+                SuperChatPresentation.GetTier(superChat.PriceCny)).Card;
+            Height = _lines.Count;
+            SetNeedsDraw();
+        }
+
+        public void Clear()
+        {
+            _lines = [];
+            SetNeedsDraw();
+        }
+
+        protected override bool OnDrawingContent(DrawContext? context)
+        {
+            SetAttribute(_attribute);
+            for (var row = 0; row < _lines.Count; row++)
+            {
+                AddStr(0, row, _lines[row]);
+            }
+
+            return true;
+        }
+
+        protected override bool OnMouseEvent(Mouse mouse)
+        {
+            if (!mouse.Flags.HasFlag(MouseFlags.LeftButtonClicked))
+            {
+                return false;
+            }
+
+            dismissed();
+            return true;
+        }
+    }
+
+    private sealed class SuperChatCapsuleView : GuiView
+    {
+        private readonly Action _accepted;
+        private readonly string _displayText;
+        private readonly SuperChatPalette _palette;
+        private double _remainingFraction;
+
+        public SuperChatCapsuleView(
+            SuperChatEvent superChat,
+            SuperChatPalette palette,
+            Action accepted)
+        {
+            _accepted = accepted;
+            _displayText = $"¥{superChat.PriceCny}";
+            _palette = palette;
+        }
+
+        public void SetRemainingFraction(double value)
+        {
+            _remainingFraction = Math.Clamp(value, 0, 1);
+            SetNeedsDraw();
+        }
+
+        protected override bool OnDrawingContent(DrawContext? context)
+        {
+            var width = Viewport.Width;
+            var filledWidth = (int)Math.Ceiling(width * _remainingFraction);
+            var textWidth = _displayText.GetColumns();
+            var textStart = Math.Max(0, (width - textWidth) / 2);
+            for (var x = 0; x < width; x++)
+            {
+                SetAttribute(x < filledWidth ? _palette.Deep : _palette.Light);
+                var characterIndex = x - textStart;
+                var character = characterIndex >= 0 && characterIndex < _displayText.Length
+                    ? _displayText[characterIndex]
+                    : ' ';
+                AddRune(x, 0, new Rune(character));
+            }
+
+            return true;
+        }
+
+        protected override bool OnMouseEvent(Mouse mouse)
+        {
+            if (!mouse.Flags.HasFlag(MouseFlags.LeftButtonClicked))
+            {
+                return false;
+            }
+
+            _accepted();
+            return true;
+        }
     }
 
     private sealed class PendingDanmaku(Guid id, string text, string userName, DateTimeOffset sentAt)

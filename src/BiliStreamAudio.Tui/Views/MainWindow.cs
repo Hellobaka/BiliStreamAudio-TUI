@@ -51,6 +51,7 @@ internal sealed class MainWindow : Window
             danmaku,
             sender,
             history,
+            mockMode,
             RefreshStatusBar);
         _tabs = new Tabs
         {
@@ -71,6 +72,10 @@ internal sealed class MainWindow : Window
             if (ReferenceEquals(args.NewValue, playbackHistory))
             {
                 playbackHistory.Load();
+            }
+            else if (ReferenceEquals(args.NewValue, LiveRoom))
+            {
+                LiveRoom.FocusInput();
             }
         };
         _tabs.Value = LiveRoom;

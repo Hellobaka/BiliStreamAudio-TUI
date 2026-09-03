@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using BiliStreamAudio.Tui.Core;
 
@@ -203,9 +204,51 @@ internal sealed class MockDanmakuConnection : IDanmakuConnection
 
     public void Publish(string userName, string message)
     {
-        var item = new DanmakuEvent(userName, message, DateTimeOffset.Now);
+        Publish(new DanmakuEvent(userName, message, DateTimeOffset.Now));
+    }
+
+    public void Publish(LiveEvent item)
+    {
         EventReceived?.Invoke(this, item);
-        Received?.Invoke(this, item);
+        if (item is DanmakuEvent danmaku)
+        {
+            Received?.Invoke(this, danmaku);
+        }
+    }
+}
+
+internal static class MockSuperChatCommand
+{
+    private const string Prefix = "sc:";
+
+    public static bool IsCommand(string value) =>
+        value.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase);
+
+    public static SuperChatEvent Parse(string value, AuthSession session, DateTimeOffset now)
+    {
+        var payload = value[Prefix.Length..];
+        var parts = payload.Split((char[]?)null, 2, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2
+            || !int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var price)
+            || price <= 0
+            || string.IsNullOrWhiteSpace(parts[1]))
+        {
+            throw new ArgumentException("Mock SC 格式应为：sc:<正整数金额> <正文>。", nameof(value));
+        }
+
+        var lifetime = SuperChatPresentation.GetLifetime(price);
+        var durationSeconds = price > int.MaxValue / 2 ? int.MaxValue : price * 2;
+        return new SuperChatEvent(
+            Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture),
+            session.UserId,
+            session.UserName ?? "Mock 用户",
+            parts[1],
+            string.Empty,
+            string.Empty,
+            price,
+            now,
+            now.Add(lifetime),
+            durationSeconds);
     }
 }
 
@@ -285,6 +328,14 @@ internal sealed class MockDanmakuSender(MockDanmakuConnection connection) : IDan
         if (!session.IsAuthenticated)
         {
             throw new InvalidOperationException("请先登录。");
+        }
+
+        if (MockSuperChatCommand.IsCommand(message))
+        {
+            var superChat = MockSuperChatCommand.Parse(message, session, DateTimeOffset.Now);
+            await Task.Delay(Random.Shared.Next(100, 301), cancellationToken).ConfigureAwait(false);
+            connection.Publish(superChat);
+            return;
         }
 
         if (string.IsNullOrWhiteSpace(message) || message.EnumerateRunes().Count() > 30)

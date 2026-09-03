@@ -71,6 +71,96 @@ public sealed class MockModeTests
     }
 
     [Fact]
+    public async Task Mock_sc_command_publishes_super_chat_without_normal_danmaku()
+    {
+        var connection = new MockDanmakuConnection();
+        var sender = new MockDanmakuSender(connection);
+        var auth = new MockAuthService();
+        var liveEvents = new List<LiveEvent>();
+        var danmaku = new List<DanmakuEvent>();
+        connection.EventReceived += (_, item) => liveEvents.Add(item);
+        connection.Received += (_, item) => danmaku.Add(item);
+        var longMessage = new string('长', 80);
+
+        await sender.SendAsync(
+            1000,
+            $"sc:30 {longMessage}",
+            auth.Current!,
+            CancellationToken.None);
+
+        var superChat = Assert.IsType<SuperChatEvent>(Assert.Single(liveEvents));
+        Assert.Empty(danmaku);
+        Assert.Equal(30, superChat.PriceCny);
+        Assert.Equal(longMessage, superChat.Message);
+        Assert.Equal(60, superChat.DurationSeconds);
+        Assert.Equal(TimeSpan.FromSeconds(60), superChat.EndsAt - superChat.StartsAt);
+    }
+
+    [Fact]
+    public async Task Mock_sc_command_rejects_invalid_price_or_missing_message()
+    {
+        var sender = new MockDanmakuSender(new MockDanmakuConnection());
+        var auth = new MockAuthService();
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => sender.SendAsync(1000, "sc:free 文本", auth.Current!, CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => sender.SendAsync(1000, "sc:30", auth.Current!, CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData(30, SuperChatTier.LightBlue)]
+    [InlineData(31, SuperChatTier.Cyan)]
+    [InlineData(100, SuperChatTier.Cyan)]
+    [InlineData(101, SuperChatTier.Gold)]
+    [InlineData(1000, SuperChatTier.Gold)]
+    [InlineData(1001, SuperChatTier.Red)]
+    public void Super_chat_tiers_follow_price_boundaries(int price, SuperChatTier expected)
+    {
+        Assert.Equal(expected, SuperChatPresentation.GetTier(price));
+        Assert.Equal(TimeSpan.FromSeconds(price * 2), SuperChatPresentation.GetLifetime(price));
+    }
+
+    [Fact]
+    public void Super_chat_remaining_fraction_is_clamped_over_its_lifetime()
+    {
+        var startsAt = new DateTimeOffset(2026, 9, 2, 12, 0, 0, TimeSpan.Zero);
+        var expiresAt = startsAt.AddSeconds(60);
+
+        Assert.Equal(1, SuperChatPresentation.GetRemainingFraction(
+            startsAt.AddSeconds(-1), startsAt, expiresAt));
+        Assert.Equal(0.5, SuperChatPresentation.GetRemainingFraction(
+            startsAt.AddSeconds(30), startsAt, expiresAt));
+        Assert.Equal(0, SuperChatPresentation.GetRemainingFraction(
+            expiresAt.AddSeconds(1), startsAt, expiresAt));
+    }
+
+    [Fact]
+    public void Super_chat_card_and_details_contain_sender_price_and_wrapped_message()
+    {
+        var item = new SuperChatEvent(
+            "sc-1",
+            42,
+            "Alice",
+            "一段足够长的醒目留言正文",
+            string.Empty,
+            string.Empty,
+            50,
+            DateTimeOffset.Now,
+            null,
+            100);
+
+        var card = LiveRoomWindow.FormatSuperChatCard(item, 20);
+        var details = LiveRoomWindow.FormatSuperChatDetails(item);
+
+        Assert.True(card.Count > 3);
+        Assert.Contains(card, line => line.Contains("SC ¥50", StringComparison.Ordinal));
+        Assert.Contains("Alice", details, StringComparison.Ordinal);
+        Assert.Contains("¥50", details, StringComparison.Ordinal);
+        Assert.Contains(item.Message, details, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Danmaku_history_navigation_moves_older_with_up_and_returns_to_draft_with_down()
     {
         var newest = LiveRoomWindow.GetNextDanmakuHistoryIndex(-1, count: 3, direction: -1);
