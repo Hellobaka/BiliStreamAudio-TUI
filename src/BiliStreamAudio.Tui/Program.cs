@@ -87,6 +87,7 @@ internal static class Program
         app.Init();
 
         var session = new RoomSession(rooms, streams, audio, danmaku, history);
+        var liveRoomDisplayOptions = new LiveRoomDisplayOptions();
         var mainWindow = new MainWindow(
             app,
             session,
@@ -98,7 +99,8 @@ internal static class Program
             danmaku,
             sender,
             history,
-            mockMode);
+            mockMode,
+            liveRoomDisplayOptions);
 
         app.Keyboard.KeyDown += (_, key) =>
         {

@@ -108,6 +108,60 @@ public sealed class MockModeTests
             () => sender.SendAsync(1000, "sc:30", auth.Current!, CancellationToken.None));
     }
 
+    [Fact]
+    public async Task Mock_gift_command_publishes_gift_event_without_normal_danmaku()
+    {
+        var connection = new MockDanmakuConnection();
+        var sender = new MockDanmakuSender(connection);
+        var auth = new MockAuthService();
+        var liveEvents = new List<LiveEvent>();
+        var danmaku = new List<DanmakuEvent>();
+        connection.EventReceived += (_, item) => liveEvents.Add(item);
+        connection.Received += (_, item) => danmaku.Add(item);
+
+        await sender.SendAsync(1000, "gift 1.5 2 小花花", auth.Current!, CancellationToken.None);
+
+        var gift = Assert.IsType<GiftEvent>(Assert.Single(liveEvents));
+        Assert.Empty(danmaku);
+        Assert.Equal("小花花", gift.GiftName);
+        Assert.Equal(2, gift.Count);
+        Assert.Equal(3m, gift.AmountCny);
+    }
+
+    [Fact]
+    public async Task Mock_gift_command_rejects_invalid_amount_count_or_description()
+    {
+        var sender = new MockDanmakuSender(new MockDanmakuConnection());
+        var auth = new MockAuthService();
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => sender.SendAsync(1000, "gift free 2 小花花", auth.Current!, CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => sender.SendAsync(1000, "gift 1.5 0 小花花", auth.Current!, CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => sender.SendAsync(1000, "gift 1.5 2", auth.Current!, CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData(1, "✨ Alice送出了小花花。")]
+    [InlineData(2, "✨ Alice送出了小花花 x2。")]
+    public void Gift_message_omits_count_for_a_single_gift(int count, string expected)
+    {
+        var gift = new GiftEvent(
+            42, "Alice", 1, "小花花", count, 100, count * 100, "gold", "gift-1", "", DateTimeOffset.Now);
+
+        Assert.Equal(expected, LiveRoomWindow.FormatGiftMessage(gift));
+    }
+
+    [Fact]
+    public void Gift_message_can_include_amount_when_enabled()
+    {
+        var gift = new GiftEvent(
+            42, "Alice", 1, "小花花", 2, 1500, 3000, "gold", "gift-1", "", DateTimeOffset.Now);
+
+        Assert.Equal("✨ Alice送出了小花花 x2。 ￥3", LiveRoomWindow.FormatGiftMessage(gift, showAmount: true));
+    }
+
     [Theory]
     [InlineData(30, SuperChatTier.LightBlue)]
     [InlineData(31, SuperChatTier.Cyan)]

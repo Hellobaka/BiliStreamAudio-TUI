@@ -25,7 +25,8 @@ internal sealed class MainWindow : Window
         IDanmakuConnection danmaku,
         IDanmakuSender sender,
         IHistoryStore history,
-        bool mockMode)
+        bool mockMode,
+        LiveRoomDisplayOptions liveRoomDisplayOptions)
     {
         Title = mockMode ? "BiliStreamAudio-TUI（模拟模式）" : "BiliStreamAudio-TUI";
         X = 0;
@@ -52,6 +53,7 @@ internal sealed class MainWindow : Window
             sender,
             history,
             mockMode,
+            liveRoomDisplayOptions,
             RefreshStatusBar);
         _tabs = new Tabs
         {

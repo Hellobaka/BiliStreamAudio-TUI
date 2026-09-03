@@ -34,7 +34,9 @@ internal sealed class LiveRoomWindow : Window
     private readonly IDanmakuSender _sender;
     private readonly IHistoryStore _history;
     private readonly bool _mockMode;
+    private readonly LiveRoomDisplayOptions _displayOptions;
     private readonly Action _refreshStatusBar;
+    private static readonly GuiAttribute GiftMessageAttribute = new(new GuiColor("#8ED8FF"), GuiColor.None);
     private static readonly Scheme SuperChatScrollButtonScheme = new(
         new GuiAttribute(GuiColor.White, GuiColor.None))
     {
@@ -76,6 +78,7 @@ internal sealed class LiveRoomWindow : Window
         IDanmakuSender sender,
         IHistoryStore history,
         bool mockMode,
+        LiveRoomDisplayOptions displayOptions,
         Action refreshStatusBar)
     {
         _app = app;
@@ -86,6 +89,7 @@ internal sealed class LiveRoomWindow : Window
         _sender = sender;
         _history = history;
         _mockMode = mockMode;
+        _displayOptions = displayOptions;
         _refreshStatusBar = refreshStatusBar;
 
         Title = "直播间";
@@ -286,7 +290,7 @@ internal sealed class LiveRoomWindow : Window
     {
         danmaku.EventReceived += (_, item) =>
         {
-            if (item is SuperChatEvent or SuperChatDeleteEvent)
+            if (item is SuperChatEvent or SuperChatDeleteEvent or GiftEvent)
             {
                 _app.Invoke(() => HandleLiveEvent(item));
             }
@@ -312,7 +316,7 @@ internal sealed class LiveRoomWindow : Window
         _input.TextChanging += (_, args) =>
         {
             var proposedText = args.Result ?? string.Empty;
-            if (_mockMode && MockSuperChatCommand.IsCommand(proposedText))
+            if (_mockMode && IsMockLiveEventCommand(proposedText))
             {
                 return;
             }
@@ -354,9 +358,9 @@ internal sealed class LiveRoomWindow : Window
                 var value = _input.Text.ToString() ?? string.Empty;
                 _input.Text = string.Empty;
                 _input.HasFocus = true;
-                if (_mockMode && MockSuperChatCommand.IsCommand(value))
+                if (_mockMode && IsMockLiveEventCommand(value))
                 {
-                    _ = SendMockSuperChatAsync(room.RoomId, value);
+                    _ = SendMockLiveEventAsync(room.RoomId, value);
                     key.Handled = true;
                     return;
                 }
@@ -377,11 +381,19 @@ internal sealed class LiveRoomWindow : Window
         _scrollSuperChatsRight.Accepted += (_, _) => ScrollSuperChats(1);
         _messages.RowRender += (_, args) =>
         {
-            if (args.Row >= 0
-                && args.Row < _messageItems.Count
-                && _messageItems[args.Row].SuperChatTier is { } tier)
+            if (args.Row < 0 || args.Row >= _messageItems.Count)
+            {
+                return;
+            }
+
+            var messageItem = _messageItems[args.Row];
+            if (messageItem.SuperChatTier is { } tier)
             {
                 args.RowAttribute = GetSuperChatPalette(tier).Card;
+            }
+            else if (messageItem.IsGift)
+            {
+                args.RowAttribute = GiftMessageAttribute;
             }
         };
         _messages.Accepted += (_, _) =>
@@ -463,7 +475,7 @@ internal sealed class LiveRoomWindow : Window
         await _sender.SendAsync(roomId, text, result.Session, CancellationToken.None).ConfigureAwait(false);
     }
 
-    private async Task SendMockSuperChatAsync(long roomId, string text)
+    private async Task SendMockLiveEventAsync(long roomId, string text)
     {
         try
         {
@@ -471,8 +483,8 @@ internal sealed class LiveRoomWindow : Window
         }
         catch (Exception exception)
         {
-            Log.Error(exception, "Mock Super Chat send failed");
-            AddMessage($"SC 模拟失败：{exception.ToDisplayText()}");
+            Log.Error(exception, "Mock live event send failed");
+            AddMessage($"模拟事件失败：{exception.ToDisplayText()}");
         }
     }
 
@@ -707,7 +719,9 @@ internal sealed class LiveRoomWindow : Window
             var inputText = _input.Text.ToString() ?? string.Empty;
             _inputStatus.Text = _mockMode && MockSuperChatCommand.IsCommand(inputText)
                 ? "Mock SC：sc:<金额> <正文>"
-                : $"{CountDanmakuCharacters(inputText)}/{MaximumDanmakuLength}";
+                : _mockMode && MockGiftCommand.IsCommand(inputText)
+                    ? "Mock 礼物：gift <金额> <个数> <描述>"
+                    : $"{CountDanmakuCharacters(inputText)}/{MaximumDanmakuLength}";
         }
         else
         {
@@ -740,7 +754,15 @@ internal sealed class LiveRoomWindow : Window
             case SuperChatDeleteEvent deleted:
                 RemoveSuperChatCapsules(deleted.Ids);
                 break;
+            case GiftEvent gift:
+                AddGiftMessage(gift);
+                break;
         }
+    }
+
+    private void AddGiftMessage(GiftEvent gift)
+    {
+        AddMessageItem(FormatGiftMessage(gift, _displayOptions.ShowGiftAmount), isGift: true);
     }
 
     private void AddSuperChat(SuperChatEvent superChat)
@@ -1132,9 +1154,10 @@ internal sealed class LiveRoomWindow : Window
         _ => new(new GuiColor("#347FA8"), new GuiColor("#A8DCF5"))
     };
 
-    private void AddMessageItem(string text) => UpdateMessageItem(Guid.NewGuid(), text, addIfMissing: true);
+    private void AddMessageItem(string text, bool isGift = false) =>
+        UpdateMessageItem(Guid.NewGuid(), text, isGift, addIfMissing: true);
 
-    private void UpdateMessageItem(Guid id, string text, bool addIfMissing = false)
+    private void UpdateMessageItem(Guid id, string text, bool isGift = false, bool addIfMissing = false)
     {
         for (var index = 0; index < _messageItems.Count; index++)
         {
@@ -1148,7 +1171,8 @@ internal sealed class LiveRoomWindow : Window
                 id,
                 text,
                 existing.SuperChat,
-                existing.SuperChatTier);
+                existing.SuperChatTier,
+                existing.IsGift);
             _messages.SetNeedsDraw();
             return;
         }
@@ -1158,7 +1182,7 @@ internal sealed class LiveRoomWindow : Window
             return;
         }
 
-        _messageItems.Add(new DanmakuListItem(id, text));
+        _messageItems.Add(new DanmakuListItem(id, text, isGift: isGift));
         while (_messageItems.Count > MaximumMessageCount)
         {
             _messageItems.RemoveAt(0);
@@ -1170,15 +1194,32 @@ internal sealed class LiveRoomWindow : Window
     private static string FormatDanmaku(DateTimeOffset receivedAt, string userName, string message) =>
         $"[{receivedAt:HH:mm:ss}] {userName}: {message}";
 
+    internal static string FormatGiftMessage(GiftEvent gift, bool showAmount = false)
+    {
+        var userName = string.IsNullOrWhiteSpace(gift.UserName) ? "匿名用户" : gift.UserName;
+        var giftName = string.IsNullOrWhiteSpace(gift.GiftName) ? "礼物" : gift.GiftName;
+        var count = Math.Max(1, gift.Count);
+        var countText = count == 1 ? string.Empty : $" x{count}";
+        var amountText = showAmount && gift.IsPaid
+            ? $" ￥{gift.AmountCny:0.##}"
+            : string.Empty;
+        return $"✨ {userName}送出了{giftName}{countText}。{amountText}";
+    }
+
+    private static bool IsMockLiveEventCommand(string value) =>
+        MockSuperChatCommand.IsCommand(value) || MockGiftCommand.IsCommand(value);
+
     private sealed class DanmakuListItem(
         Guid id,
         string text,
         SuperChatEvent? superChat = null,
-        SuperChatTier? superChatTier = null)
+        SuperChatTier? superChatTier = null,
+        bool isGift = false)
     {
         public Guid Id { get; } = id;
         public SuperChatEvent? SuperChat { get; } = superChat;
         public SuperChatTier? SuperChatTier { get; } = superChatTier;
+        public bool IsGift { get; } = isGift;
 
         public override string ToString() => text;
     }

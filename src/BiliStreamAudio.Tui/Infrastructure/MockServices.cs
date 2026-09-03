@@ -252,6 +252,53 @@ internal static class MockSuperChatCommand
     }
 }
 
+internal static class MockGiftCommand
+{
+    private const string Prefix = "gift";
+
+    public static bool IsCommand(string value) =>
+        value.Equals(Prefix, StringComparison.OrdinalIgnoreCase)
+        || value.StartsWith($"{Prefix} ", StringComparison.OrdinalIgnoreCase);
+
+    public static GiftEvent Parse(string value, AuthSession session, DateTimeOffset now)
+    {
+        var parts = value.Split((char[]?)null, 4, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 4
+            || !decimal.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var amount)
+            || amount <= 0
+            || !int.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out var count)
+            || count <= 0
+            || string.IsNullOrWhiteSpace(parts[3]))
+        {
+            throw new ArgumentException("Mock 礼物格式应为：gift <正数金额> <正整数个数> <描述>。", nameof(value));
+        }
+
+        if (amount > long.MaxValue / 1000m)
+        {
+            throw new ArgumentException("Mock 礼物金额或个数超出范围。", nameof(value));
+        }
+
+        var unitPrice = decimal.ToInt64(decimal.Round(amount * 1000m, 0, MidpointRounding.AwayFromZero));
+        if (unitPrice < 1 || unitPrice > long.MaxValue / count)
+        {
+            throw new ArgumentException("Mock 礼物金额或个数超出范围。", nameof(value));
+        }
+
+        return new GiftEvent(
+            session.UserId,
+            session.UserName ?? "Mock 用户",
+            0,
+            parts[3],
+            count,
+            unitPrice,
+            unitPrice * count,
+            "gold",
+            Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture),
+            string.Empty,
+            now);
+    }
+}
+
 internal sealed class MockHistoryStore : IHistoryStore
 {
     private readonly object _gate = new();
@@ -335,6 +382,14 @@ internal sealed class MockDanmakuSender(MockDanmakuConnection connection) : IDan
             var superChat = MockSuperChatCommand.Parse(message, session, DateTimeOffset.Now);
             await Task.Delay(Random.Shared.Next(100, 301), cancellationToken).ConfigureAwait(false);
             connection.Publish(superChat);
+            return;
+        }
+
+        if (MockGiftCommand.IsCommand(message))
+        {
+            var gift = MockGiftCommand.Parse(message, session, DateTimeOffset.Now);
+            await Task.Delay(Random.Shared.Next(100, 301), cancellationToken).ConfigureAwait(false);
+            connection.Publish(gift);
             return;
         }
 
