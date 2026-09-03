@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.Text;
 using BiliStreamAudio.Tui.Core;
 using BiliStreamAudio.Tui.Infrastructure;
@@ -176,7 +177,7 @@ internal sealed class LiveRoomWindow : Window
             Height = Dim.Fill(7),
             ViewportSettings = ViewportSettingsFlags.HasVerticalScrollBar
         };
-        _messages.SetSource(_messageItems);
+        _messages.Source = new DanmakuListDataSource(_messageItems, () => _displayOptions.ShowFanMedals);
         _input = new TextField
         {
             Text = "",
@@ -208,6 +209,8 @@ internal sealed class LiveRoomWindow : Window
     public bool IsInputFocused => _input.HasFocus;
 
     public void FocusInput() => _input.SetFocus();
+
+    public void RefreshDanmakuRendering() => _messages.SetNeedsDraw();
 
     private void OnRoomChanged(LiveRoom room)
     {
@@ -299,7 +302,9 @@ internal sealed class LiveRoomWindow : Window
         {
             if (!TryConfirmDanmaku(item))
             {
-                AddMessageItem(FormatDanmaku(item.ReceivedAt, item.UserName, item.Message));
+                AddMessageItem(
+                    FormatDanmaku(item.ReceivedAt, item.UserName, item.Message),
+                    danmaku: item);
             }
         });
         danmaku.StatusChanged += (_, status) => _app.Invoke(() =>
@@ -379,23 +384,6 @@ internal sealed class LiveRoomWindow : Window
 
         _scrollSuperChatsLeft.Accepted += (_, _) => ScrollSuperChats(-1);
         _scrollSuperChatsRight.Accepted += (_, _) => ScrollSuperChats(1);
-        _messages.RowRender += (_, args) =>
-        {
-            if (args.Row < 0 || args.Row >= _messageItems.Count)
-            {
-                return;
-            }
-
-            var messageItem = _messageItems[args.Row];
-            if (messageItem.SuperChatTier is { } tier)
-            {
-                args.RowAttribute = GetSuperChatPalette(tier).Card;
-            }
-            else if (messageItem.IsGift)
-            {
-                args.RowAttribute = GiftMessageAttribute;
-            }
-        };
         _messages.Accepted += (_, _) =>
         {
             if (_messages.SelectedItem is { } index
@@ -644,7 +632,10 @@ internal sealed class LiveRoomWindow : Window
         }
 
         _pendingDanmaku.Remove(pending);
-        UpdateMessageItem(pending.Id, FormatDanmaku(item.ReceivedAt, item.UserName, item.Message));
+        UpdateMessageItem(
+            pending.Id,
+            FormatDanmaku(item.ReceivedAt, item.UserName, item.Message),
+            danmaku: item);
         return true;
     }
 
@@ -721,6 +712,8 @@ internal sealed class LiveRoomWindow : Window
                 ? "Mock SC：sc:<金额> <正文>"
                 : _mockMode && MockGiftCommand.IsCommand(inputText)
                     ? "Mock 礼物：gift <金额> <个数> <描述>"
+                    : _mockMode && MockFanMedalCommand.IsCommand(inputText)
+                        ? "Mock 勋章：badge <等级> <名称>"
                     : $"{CountDanmakuCharacters(inputText)}/{MaximumDanmakuLength}";
         }
         else
@@ -1154,10 +1147,18 @@ internal sealed class LiveRoomWindow : Window
         _ => new(new GuiColor("#347FA8"), new GuiColor("#A8DCF5"))
     };
 
-    private void AddMessageItem(string text, bool isGift = false) =>
-        UpdateMessageItem(Guid.NewGuid(), text, isGift, addIfMissing: true);
+    private void AddMessageItem(
+        string text,
+        bool isGift = false,
+        DanmakuEvent? danmaku = null) =>
+        UpdateMessageItem(Guid.NewGuid(), text, isGift, addIfMissing: true, danmaku: danmaku);
 
-    private void UpdateMessageItem(Guid id, string text, bool isGift = false, bool addIfMissing = false)
+    private void UpdateMessageItem(
+        Guid id,
+        string text,
+        bool isGift = false,
+        bool addIfMissing = false,
+        DanmakuEvent? danmaku = null)
     {
         for (var index = 0; index < _messageItems.Count; index++)
         {
@@ -1172,7 +1173,8 @@ internal sealed class LiveRoomWindow : Window
                 text,
                 existing.SuperChat,
                 existing.SuperChatTier,
-                existing.IsGift);
+                existing.IsGift,
+                danmaku ?? existing.Danmaku);
             _messages.SetNeedsDraw();
             return;
         }
@@ -1182,7 +1184,7 @@ internal sealed class LiveRoomWindow : Window
             return;
         }
 
-        _messageItems.Add(new DanmakuListItem(id, text, isGift: isGift));
+        _messageItems.Add(new DanmakuListItem(id, text, danmaku: danmaku, isGift: isGift));
         while (_messageItems.Count > MaximumMessageCount)
         {
             _messageItems.RemoveAt(0);
@@ -1207,19 +1209,135 @@ internal sealed class LiveRoomWindow : Window
     }
 
     private static bool IsMockLiveEventCommand(string value) =>
-        MockSuperChatCommand.IsCommand(value) || MockGiftCommand.IsCommand(value);
+        MockSuperChatCommand.IsCommand(value)
+        || MockGiftCommand.IsCommand(value)
+        || MockFanMedalCommand.IsCommand(value);
+
+    private sealed class DanmakuListDataSource : IListDataSource
+    {
+        private readonly ObservableCollection<DanmakuListItem> _items;
+        private readonly Func<bool> _showFanMedals;
+        private readonly NotifyCollectionChangedEventHandler _itemsChanged;
+
+        public DanmakuListDataSource(
+            ObservableCollection<DanmakuListItem> items,
+            Func<bool> showFanMedals)
+        {
+            _items = items;
+            _showFanMedals = showFanMedals;
+            _itemsChanged = (_, args) =>
+            {
+                if (!SuspendCollectionChangedEvent)
+                {
+                    CollectionChanged?.Invoke(this, args);
+                }
+            };
+            _items.CollectionChanged += _itemsChanged;
+        }
+
+        public event NotifyCollectionChangedEventHandler? CollectionChanged;
+
+        public int Count => _items.Count;
+
+        public int MaxItemLength => _items.Count == 0
+            ? 0
+            : _items.Max(item => item.ToString().GetColumns());
+
+        public bool SuspendCollectionChangedEvent { get; set; }
+
+        public bool IsMarked(int item) => false;
+
+        public void SetMark(int item, bool value)
+        {
+        }
+
+        public System.Collections.IList ToList() => _items;
+
+        public void Dispose() => _items.CollectionChanged -= _itemsChanged;
+
+        public bool RenderMark(
+            GuiListView listView,
+            int item,
+            int row,
+            bool isMarked,
+            bool markMultiple) => false;
+
+        public void Render(
+            GuiListView listView,
+            bool selected,
+            int item,
+            int col,
+            int row,
+            int width,
+            int viewportX)
+        {
+            var message = _items[item];
+            var rowAttribute = GetRowAttribute(listView, message, selected);
+            if (!_showFanMedals()
+                || message.Danmaku?.Medal is not { } medal)
+            {
+                DrawSegment(listView, col, row, message.ToString(), rowAttribute);
+                return;
+            }
+
+            var danmaku = message.Danmaku;
+            DrawSegment(listView, col, row, $"[{danmaku.ReceivedAt:HH:mm:ss}] ", rowAttribute);
+            var medalText = FanMedalPresentation.GetDisplayText(medal.Level, medal.Name);
+            DrawSegment(listView, col + $"[{danmaku.ReceivedAt:HH:mm:ss}] ".GetColumns(), row, medalText,
+                new GuiAttribute(GuiColor.White, new GuiColor(FanMedalPresentation.GetBackgroundColor(medal.Level)), TextStyle.Bold));
+            DrawSegment(
+                listView,
+                col + $"[{danmaku.ReceivedAt:HH:mm:ss}] ".GetColumns() + medalText.GetColumns(),
+                row,
+                $" {danmaku.UserName}: {danmaku.Message}",
+                rowAttribute);
+        }
+
+        private static GuiAttribute GetRowAttribute(
+            GuiListView listView,
+            DanmakuListItem message,
+            bool selected)
+        {
+            if (selected)
+            {
+                return listView.GetAttributeForRole(VisualRole.Active);
+            }
+
+            if (message.SuperChatTier is { } tier)
+            {
+                return GetSuperChatPalette(tier).Card;
+            }
+
+            return message.IsGift
+                ? GiftMessageAttribute
+                : listView.GetAttributeForRole(VisualRole.Normal);
+        }
+
+        private static void DrawSegment(
+            GuiListView listView,
+            int col,
+            int row,
+            string text,
+            GuiAttribute attribute)
+        {
+            listView.SetAttribute(attribute);
+            listView.AddStr(col, row, text);
+        }
+    }
 
     private sealed class DanmakuListItem(
         Guid id,
         string text,
         SuperChatEvent? superChat = null,
         SuperChatTier? superChatTier = null,
-        bool isGift = false)
+        bool isGift = false,
+        DanmakuEvent? danmaku = null)
     {
         public Guid Id { get; } = id;
         public SuperChatEvent? SuperChat { get; } = superChat;
         public SuperChatTier? SuperChatTier { get; } = superChatTier;
         public bool IsGift { get; } = isGift;
+        public DanmakuEvent? Danmaku { get; } = danmaku;
 
         public override string ToString() => text;
     }

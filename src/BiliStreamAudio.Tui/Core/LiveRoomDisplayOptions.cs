@@ -9,4 +9,9 @@ public sealed class LiveRoomDisplayOptions
     /// 是否在礼物消息中显示人民币金额。
     /// </summary>
     public bool ShowGiftAmount { get; set; } = true;
+
+    /// <summary>
+    /// 是否在弹幕用户名之前渲染粉丝勋章。
+    /// </summary>
+    public bool ShowFanMedals { get; set; } = true;
 }

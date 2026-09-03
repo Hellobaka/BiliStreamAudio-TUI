@@ -299,6 +299,48 @@ internal static class MockGiftCommand
     }
 }
 
+internal static class MockFanMedalCommand
+{
+    private const string Prefix = "badge";
+
+    public static bool IsCommand(string value) =>
+        value.Equals(Prefix, StringComparison.OrdinalIgnoreCase)
+        || value.StartsWith($"{Prefix} ", StringComparison.OrdinalIgnoreCase);
+
+    public static FanMedal Parse(string value)
+    {
+        var parts = value.Split((char[]?)null, 3, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 3
+            || !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var level)
+            || level < 0
+            || string.IsNullOrWhiteSpace(parts[2]))
+        {
+            throw new ArgumentException("Mock 勋章格式应为：badge <非负等级> <名称>。", nameof(value));
+        }
+
+        return new FanMedal(
+            0,
+            parts[2],
+            level,
+            0,
+            string.Empty,
+            0,
+            false,
+            0,
+            0,
+            0,
+            0,
+            0,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty);
+    }
+}
+
 internal sealed class MockHistoryStore : IHistoryStore
 {
     private readonly object _gate = new();
@@ -365,6 +407,8 @@ internal sealed class MockHistoryStore : IHistoryStore
 
 internal sealed class MockDanmakuSender(MockDanmakuConnection connection) : IDanmakuSender
 {
+    private FanMedal? _fanMedal;
+
     public async Task SendAsync(
         long roomId,
         string message,
@@ -393,6 +437,12 @@ internal sealed class MockDanmakuSender(MockDanmakuConnection connection) : IDan
             return;
         }
 
+        if (MockFanMedalCommand.IsCommand(message))
+        {
+            _fanMedal = MockFanMedalCommand.Parse(message);
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(message) || message.EnumerateRunes().Count() > 30)
         {
             throw new ArgumentException("弹幕长度须为 1–30 个字符。", nameof(message));
@@ -404,6 +454,10 @@ internal sealed class MockDanmakuSender(MockDanmakuConnection connection) : IDan
             throw new InvalidOperationException("模拟发送失败。");
         }
 
-        connection.Publish(session.UserName ?? "Mock 用户", message);
+        connection.Publish(new DanmakuEvent(
+            session.UserName ?? "Mock 用户",
+            message,
+            DateTimeOffset.Now,
+            Medal: _fanMedal));
     }
 }

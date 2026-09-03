@@ -142,6 +142,37 @@ public sealed class MockModeTests
             () => sender.SendAsync(1000, "gift 1.5 2", auth.Current!, CancellationToken.None));
     }
 
+    [Fact]
+    public async Task Mock_badge_command_attaches_the_selected_medal_to_later_danmaku()
+    {
+        var connection = new MockDanmakuConnection();
+        var sender = new MockDanmakuSender(connection);
+        var auth = new MockAuthService();
+        var received = new List<DanmakuEvent>();
+        connection.Received += (_, item) => received.Add(item);
+
+        await sender.SendAsync(1000, "badge 17 测试团", auth.Current!, CancellationToken.None);
+        await sender.SendAsync(1000, "携带勋章的弹幕", auth.Current!, CancellationToken.None);
+
+        var danmaku = Assert.Single(received);
+        var medal = Assert.IsType<FanMedal>(danmaku.Medal);
+        Assert.Equal(17, medal.Level);
+        Assert.Equal("测试团", medal.Name);
+    }
+
+    [Theory]
+    [InlineData("badge -1 测试团")]
+    [InlineData("badge 17")]
+    [InlineData("badge 等级 测试团")]
+    public async Task Mock_badge_command_rejects_invalid_level_or_missing_name(string command)
+    {
+        var sender = new MockDanmakuSender(new MockDanmakuConnection());
+        var auth = new MockAuthService();
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => sender.SendAsync(1000, command, auth.Current!, CancellationToken.None));
+    }
+
     [Theory]
     [InlineData(1, "✨ Alice送出了小花花。")]
     [InlineData(2, "✨ Alice送出了小花花 x2。")]

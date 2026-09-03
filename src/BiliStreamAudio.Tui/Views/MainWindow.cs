@@ -64,11 +64,12 @@ internal sealed class MainWindow : Window
         };
         Browse = new BrowseWindow(app, directory, rooms, session, ShowLiveRoom);
         var playbackHistory = new PlaybackHistoryWindow(app, history, rooms, session, ShowLiveRoom);
+        var settings = new SettingsWindow(liveRoomDisplayOptions, LiveRoom.RefreshDanmakuRendering);
         _tabs.Add(
             LiveRoom,
             Browse,
             playbackHistory,
-            new PlaceholderWindow("设置", "应用设置将在这里配置。"));
+            settings);
         _tabs.ValueChanged += (_, args) =>
         {
             if (ReferenceEquals(args.NewValue, playbackHistory))
