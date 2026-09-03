@@ -40,6 +40,11 @@ internal sealed class LiveRoomWindow : Window
     private readonly Action _closeLiveRoom;
     private static readonly GuiAttribute GiftMessageAttribute = new(new GuiColor("#8ED8FF"), GuiColor.None);
     private static readonly GuiAttribute GuardMessageAttribute = new(new GuiColor("#C994FF"), GuiColor.None);
+    private static readonly Scheme ActiveTabTitleScheme = new(new GuiAttribute(new GuiColor("#F2D06B"), GuiColor.None))
+    {
+        Focus = new GuiAttribute(new GuiColor("#F2D06B"), GuiColor.None),
+        Active = new GuiAttribute(new GuiColor("#F2D06B"), GuiColor.None)
+    };
     private static readonly Scheme SuperChatScrollButtonScheme = new(
         new GuiAttribute(GuiColor.White, GuiColor.None))
     {
@@ -71,6 +76,7 @@ internal sealed class LiveRoomWindow : Window
     private int _lastVisibleSuperChat = -1;
     private object? _superChatTimerToken;
     private SuperChatEvent? _expandedSuperChat;
+    private Scheme? _inactiveTabTitleScheme;
 
     public LiveRoomWindow(
         IApplication app,
@@ -235,6 +241,7 @@ internal sealed class LiveRoomWindow : Window
 
         _currentRoomId = room.RoomId;
         LoadDanmakuHistory(room.RoomId);
+        RefreshTabAppearance();
         RefreshHeader();
         _input.SetFocus();
     }
@@ -279,6 +286,19 @@ internal sealed class LiveRoomWindow : Window
         _header.Text = $"{roomStatus} · {_sessionStatus} · {CreateLoginStatus(_auth.Current)}";
         _header.SetNeedsDraw();
         RefreshDanmakuInput();
+    }
+
+    private void RefreshTabAppearance()
+    {
+        var titleView = (Border.View as BorderView)?.TitleView;
+        if (titleView is null)
+        {
+            return;
+        }
+
+        _inactiveTabTitleScheme ??= titleView.GetScheme();
+        titleView.SetScheme(_session.Room is null ? _inactiveTabTitleScheme : ActiveTabTitleScheme);
+        titleView.SetNeedsDraw();
     }
 
     public void AddMessage(string value)
@@ -331,6 +351,7 @@ internal sealed class LiveRoomWindow : Window
         _session.StatusChanged += (_, status) => _app.Invoke(() =>
         {
             _sessionStatus = status;
+            RefreshTabAppearance();
             RefreshHeader();
         });
         _input.TextChanging += (_, args) =>
