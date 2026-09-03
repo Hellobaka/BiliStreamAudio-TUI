@@ -9,6 +9,8 @@ public sealed class RoomSession : IAsyncDisposable
     private readonly IHistoryStore? _history;
     private CancellationTokenSource? _sessionLifetime;
 
+    public LiveRoomStatistics Statistics { get; }
+
     public LiveRoom? Room
     {
         get; private set;
@@ -22,18 +24,22 @@ public sealed class RoomSession : IAsyncDisposable
         IStreamResolver streams,
         IAudioPlayer audio,
         IDanmakuConnection danmaku,
-        IHistoryStore? history = null)
+        IHistoryStore? history = null,
+        TimeProvider? timeProvider = null)
     {
         _rooms = rooms;
         _streams = streams;
         _audio = audio;
         _danmaku = danmaku;
         _history = history;
+        Statistics = new LiveRoomStatistics(timeProvider);
+        _danmaku.EventReceived += OnLiveEventReceived;
     }
 
     public async Task SwitchAsync(long roomId, CancellationToken cancellationToken)
     {
         await StopCurrentAsync().ConfigureAwait(false);
+        Statistics.Reset();
         _sessionLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var token = _sessionLifetime.Token;
         StatusChanged?.Invoke(this, "正在解析直播间…");
@@ -55,6 +61,7 @@ public sealed class RoomSession : IAsyncDisposable
 
         var stream = candidates.FirstOrDefault() ?? throw new InvalidOperationException("没有可用的音频流。");
         await _audio.PlayAsync(stream, token).ConfigureAwait(false);
+        Statistics.Start();
         await _danmaku.ConnectAsync(room, token).ConfigureAwait(false);
         var historyWarning = string.Empty;
         try
@@ -86,6 +93,7 @@ public sealed class RoomSession : IAsyncDisposable
     private async Task StopCurrentAsync()
     {
         _sessionLifetime?.Cancel();
+        Statistics.Stop();
         await _audio.StopAsync().ConfigureAwait(false);
         await _danmaku.DisconnectAsync().ConfigureAwait(false);
         _sessionLifetime?.Dispose();
@@ -95,7 +103,10 @@ public sealed class RoomSession : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await StopCurrentAsync().ConfigureAwait(false);
+        _danmaku.EventReceived -= OnLiveEventReceived;
         _audio.Dispose();
         await _danmaku.DisposeAsync().ConfigureAwait(false);
     }
+
+    private void OnLiveEventReceived(object? sender, LiveEvent liveEvent) => Statistics.Record(liveEvent);
 }
