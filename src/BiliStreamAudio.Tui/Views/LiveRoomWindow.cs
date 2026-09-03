@@ -39,6 +39,7 @@ internal sealed class LiveRoomWindow : ApplicationWindow
     private readonly LiveRoomDisplayOptions _displayOptions;
     private readonly Action _refreshStatusBar;
     private readonly Action _closeLiveRoom;
+    private readonly Action _persistVolume;
     private static readonly GuiAttribute GiftMessageAttribute = new(new GuiColor("#8ED8FF"), GuiColor.None);
     private static readonly GuiAttribute GuardMessageAttribute = new(new GuiColor("#C994FF"), GuiColor.None);
     private static readonly Scheme ActiveTabTitleScheme = new(new GuiAttribute(new GuiColor("#F2D06B"), GuiColor.None))
@@ -91,7 +92,8 @@ internal sealed class LiveRoomWindow : ApplicationWindow
         bool mockMode,
         LiveRoomDisplayOptions displayOptions,
         Action refreshStatusBar,
-        Action closeLiveRoom)
+        Action closeLiveRoom,
+        Action persistVolume)
     {
         _app = app;
         _session = session;
@@ -104,6 +106,7 @@ internal sealed class LiveRoomWindow : ApplicationWindow
         _displayOptions = displayOptions;
         _refreshStatusBar = refreshStatusBar;
         _closeLiveRoom = closeLiveRoom;
+        _persistVolume = persistVolume;
 
         Title = "直播间";
         _header = new GuiLabel
@@ -465,12 +468,14 @@ internal sealed class LiveRoomWindow : ApplicationWindow
             else if (key == (Key)'+')
             {
                 _audio.SetVolume(_audio.Volume + 5);
+                _persistVolume();
                 _refreshStatusBar();
                 key.Handled = true;
             }
             else if (key == (Key)'-')
             {
                 _audio.SetVolume(_audio.Volume - 5);
+                _persistVolume();
                 _refreshStatusBar();
                 key.Handled = true;
             }

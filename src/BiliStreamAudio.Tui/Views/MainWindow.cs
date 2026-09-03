@@ -11,6 +11,7 @@ internal sealed class MainWindow : ApplicationWindow
     private readonly Tabs _tabs;
     private readonly SpectrumStatusBarView _statusBar;
     private readonly IAudioPlayer _audio;
+    private readonly ISettingsStore _settingsStore;
     private readonly bool _mockMode;
     private readonly LiveRoomDisplayOptions _displayOptions;
 
@@ -36,6 +37,7 @@ internal sealed class MainWindow : ApplicationWindow
         Height = Dim.Fill();
         BorderStyle = LineStyle.None;
         _audio = audio;
+        _settingsStore = settingsStore;
         _mockMode = mockMode;
         _displayOptions = liveRoomDisplayOptions;
 
@@ -58,7 +60,8 @@ internal sealed class MainWindow : ApplicationWindow
             mockMode,
             liveRoomDisplayOptions,
             RefreshStatusBar,
-            CloseLiveRoom);
+            CloseLiveRoom,
+            PersistVolume);
         _tabs = new Tabs
         {
             X = 0,
@@ -68,7 +71,7 @@ internal sealed class MainWindow : ApplicationWindow
         };
         Browse = new BrowseWindow(app, directory, rooms, session, ShowLiveRoom);
         var playbackHistory = new PlaybackHistoryWindow(app, history, rooms, session, ShowLiveRoom);
-        Settings = new SettingsWindow(app, liveRoomDisplayOptions, () =>
+        Settings = new SettingsWindow(app, liveRoomDisplayOptions, audio, () =>
         {
             LiveRoom.RefreshDisplay();
             RefreshStatusBar();
@@ -129,6 +132,13 @@ internal sealed class MainWindow : ApplicationWindow
         _statusBar.SetStatus($"音量 {_audio.Volume}{muteStatus} · {_audio.State.ToDisplayText()}{mockStatus} · Esc 关闭直播间 · r 刷新 · m 静音 · +/- 音量 · l 登录 · Q/E 切换标签 · Ctrl+C 退出");
         _statusBar.SetBandCount(_displayOptions.SpectrumBandCount);
         _statusBar.SetColorMode(_displayOptions.SpectrumColorMode);
+    }
+
+    private void PersistVolume()
+    {
+        var settings = _settingsStore.Load();
+        settings.Volume = _audio.Volume;
+        _settingsStore.Save(settings);
     }
 
     private void SelectTab(int offset)

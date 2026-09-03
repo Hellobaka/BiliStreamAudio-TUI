@@ -45,6 +45,7 @@ internal sealed class SettingsWindow : ApplicationWindow
         new GuiAttribute(WarningOrange, GuiColor.None, TextStyle.Bold));
 
     private readonly LiveRoomDisplayOptions _displayOptions;
+    private readonly IAudioPlayer _audio;
     private readonly Action _refreshDisplay;
     private readonly IAuthService _auth;
     private readonly ITokenRefreshService _tokenRefresh;
@@ -70,6 +71,7 @@ internal sealed class SettingsWindow : ApplicationWindow
     public SettingsWindow(
         IApplication app,
         LiveRoomDisplayOptions displayOptions,
+        IAudioPlayer audio,
         Action refreshDisplay,
         IAuthService auth,
         ITokenRefreshService tokenRefresh,
@@ -78,6 +80,7 @@ internal sealed class SettingsWindow : ApplicationWindow
         Title = " 设置 ";
         _app = app;
         _displayOptions = displayOptions;
+        _audio = audio;
         _refreshDisplay = refreshDisplay;
         _auth = auth;
         _tokenRefresh = tokenRefresh;
@@ -201,6 +204,7 @@ internal sealed class SettingsWindow : ApplicationWindow
     {
         return new AppSettings
         {
+            Volume = _audio.Volume,
             ShowDanmaku = _displayOptions.ShowDanmaku,
             ShowSuperChats = _displayOptions.ShowSuperChats,
             ShowGifts = _displayOptions.ShowGifts,

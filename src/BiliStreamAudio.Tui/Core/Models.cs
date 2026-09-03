@@ -216,6 +216,7 @@ public sealed record RefreshResult(bool Success, AuthSession? Session, string? E
 public sealed class AppSettings
 {
     public int Id { get; set; } = 1;
+    public int Volume { get; set; } = 70;
     public bool ShowDanmaku { get; set; } = true;
     public bool ShowSuperChats { get; set; } = true;
     public bool ShowGifts { get; set; } = true;

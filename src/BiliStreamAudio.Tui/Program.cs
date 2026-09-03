@@ -55,6 +55,7 @@ internal static class Program
         BiliHttp? http = null;
 
         var settingsStore = new SettingsStore();
+        var settings = settingsStore.Load();
         var liveRoomDisplayOptions = new LiveRoomDisplayOptions();
 
         if (mockMode)
@@ -85,6 +86,8 @@ internal static class Program
             sender = new DanmakuSender();
             history = new HistoryStore();
         }
+
+        audio.SetVolume(settings.Volume);
 
         using IApplication app = GuiApplication.Create();
         app.Init();

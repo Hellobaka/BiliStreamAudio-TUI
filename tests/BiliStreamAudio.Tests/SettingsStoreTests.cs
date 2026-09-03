@@ -28,6 +28,7 @@ public sealed class SettingsStoreTests : IDisposable
 
         var settings = store.Load();
 
+        Assert.Equal(70, settings.Volume);
         Assert.True(settings.ShowDanmaku);
         Assert.True(settings.ShowSuperChats);
         Assert.True(settings.ShowGifts);
@@ -46,6 +47,7 @@ public sealed class SettingsStoreTests : IDisposable
 
         var original = new AppSettings
         {
+            Volume = 35,
             ShowDanmaku = false,
             ShowSuperChats = false,
             ShowGifts = false,
@@ -60,6 +62,7 @@ public sealed class SettingsStoreTests : IDisposable
 
         var loaded = store.Load();
 
+        Assert.Equal(35, loaded.Volume);
         Assert.False(loaded.ShowDanmaku);
         Assert.False(loaded.ShowSuperChats);
         Assert.False(loaded.ShowGifts);
@@ -78,6 +81,7 @@ public sealed class SettingsStoreTests : IDisposable
         {
             store.Save(new AppSettings
             {
+                Volume = 25,
                 ShowDanmaku = false,
                 SpectrumBandCount = 16,
                 DanmakuBlockedList = ["测试词"]
@@ -87,6 +91,7 @@ public sealed class SettingsStoreTests : IDisposable
         using var reopened = new SettingsStore(_dbPath);
         var loaded = reopened.Load();
 
+        Assert.Equal(25, loaded.Volume);
         Assert.False(loaded.ShowDanmaku);
         Assert.Equal(16, loaded.SpectrumBandCount);
         Assert.Equal(["测试词"], loaded.DanmakuBlockedList);
