@@ -618,6 +618,48 @@ internal static class MockFanMedalCommand
         rune.Value is <= 0x7f ? 1 : 2);
 }
 
+internal static class MockGuardCommand
+{
+    private const string Prefix = "guard";
+
+    public static bool IsCommand(string value) =>
+        value.Equals(Prefix, StringComparison.OrdinalIgnoreCase)
+        || value.StartsWith($"{Prefix} ", StringComparison.OrdinalIgnoreCase);
+
+    public static GuardPurchaseEvent Parse(string value, AuthSession session, DateTimeOffset now)
+    {
+        var parts = value.Split((char[]?)null, 3, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 3
+            || !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var guardLevel)
+            || guardLevel is < 1 or > 3
+            || !int.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out var count)
+            || count <= 0)
+        {
+            throw new ArgumentException(
+                "Mock 上舰格式应为：guard <档位 1=总督/2=提督/3=舰长> <正整数月数>。",
+                nameof(value));
+        }
+
+        var (price, giftName) = guardLevel switch
+        {
+            3 => (198_000L, "舰长"),
+            2 => (1_998_000L, "提督"),
+            1 => (19_998_000L, "总督"),
+            _ => throw new InvalidOperationException("不支持的 Mock 上舰档位。")
+        };
+
+        return new GuardPurchaseEvent(
+            session.UserId,
+            session.UserName ?? "Mock 用户",
+            guardLevel,
+            count,
+            price,
+            0,
+            giftName,
+            now);
+    }
+}
+
 internal sealed class MockHistoryStore : IHistoryStore
 {
     private readonly object _gate = new();
@@ -717,6 +759,14 @@ internal sealed class MockDanmakuSender(MockDanmakuConnection connection) : IDan
         if (MockFanMedalCommand.IsCommand(message))
         {
             _fanMedal = MockFanMedalCommand.Parse(message);
+            return;
+        }
+
+        if (MockGuardCommand.IsCommand(message))
+        {
+            var guard = MockGuardCommand.Parse(message, session, DateTimeOffset.Now);
+            await Task.Delay(Random.Shared.Next(100, 301), cancellationToken).ConfigureAwait(false);
+            connection.Publish(guard);
             return;
         }
 

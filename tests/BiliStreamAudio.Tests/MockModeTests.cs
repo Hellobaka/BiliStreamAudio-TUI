@@ -210,6 +210,38 @@ public sealed class MockModeTests
     }
 
     [Fact]
+    public async Task Mock_guard_command_publishes_guard_purchase_with_the_selected_tier()
+    {
+        var connection = new MockDanmakuConnection();
+        var sender = new MockDanmakuSender(connection);
+        var auth = new MockAuthService();
+        var liveEvents = new List<LiveEvent>();
+        connection.EventReceived += (_, item) => liveEvents.Add(item);
+
+        await sender.SendAsync(1000, "guard 2 3", auth.Current!, CancellationToken.None);
+
+        var guard = Assert.IsType<GuardPurchaseEvent>(Assert.Single(liveEvents));
+        Assert.Equal(2, guard.GuardLevel);
+        Assert.Equal(3, guard.Count);
+        Assert.Equal("提督", guard.GiftName);
+        Assert.Equal(1998m, guard.AmountCny);
+    }
+
+    [Theory]
+    [InlineData("guard 0 1")]
+    [InlineData("guard 4 1")]
+    [InlineData("guard 1 0")]
+    [InlineData("guard 1")]
+    public async Task Mock_guard_command_rejects_invalid_tier_or_month_count(string command)
+    {
+        var sender = new MockDanmakuSender(new MockDanmakuConnection());
+        var auth = new MockAuthService();
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => sender.SendAsync(1000, command, auth.Current!, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Mock_badge_command_attaches_the_selected_medal_to_later_danmaku()
     {
         var connection = new MockDanmakuConnection();
@@ -260,6 +292,16 @@ public sealed class MockModeTests
             42, "Alice", 1, "小花花", 2, 1500, 3000, "gold", "gift-1", "", DateTimeOffset.Now);
 
         Assert.Equal("✨ Alice送出了小花花 x2。 ￥3", LiveRoomWindow.FormatGiftMessage(gift, showAmount: true));
+    }
+
+    [Fact]
+    public void Guard_purchase_message_shares_the_gift_amount_setting()
+    {
+        var guard = new GuardPurchaseEvent(
+            42, "Alice", 1, 2, 19_998_000, 0, "总督", DateTimeOffset.Now);
+
+        Assert.Equal("⚓ Alice开通了总督 2个月。", LiveRoomWindow.FormatGuardPurchaseMessage(guard));
+        Assert.Equal("⚓ Alice开通了总督 2个月。￥19998", LiveRoomWindow.FormatGuardPurchaseMessage(guard, showAmount: true));
     }
 
     [Theory]

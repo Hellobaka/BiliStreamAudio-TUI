@@ -48,11 +48,16 @@ internal sealed class SettingsWindow : Window
             displayOptions.ShowGifts,
             value => displayOptions.ShowGifts = value,
             y: 6);
+        var showGuardsToggle = CreateToggle(
+            "显示上舰",
+            displayOptions.ShowGuards,
+            value => displayOptions.ShowGuards = value,
+            y: 7);
         var fanMedalToggle = new GuiCheckBox
         {
             Text = "渲染粉丝勋章",
             X = 1,
-            Y = 7,
+            Y = 8,
             Value = displayOptions.ShowFanMedals ? GuiCheckState.Checked : GuiCheckState.UnChecked
         };
         fanMedalToggle.ValueChanged += (_, args) =>
@@ -67,12 +72,13 @@ internal sealed class SettingsWindow : Window
             showDanmakuToggle,
             showSuperChatsToggle,
             showGiftsToggle,
+            showGuardsToggle,
             fanMedalToggle,
             new GuiLabel
             {
                 Text = "屏蔽词只匹配普通弹幕；关闭后，相应类型的消息不显示。",
                 X = 1,
-                Y = 9
+                Y = 10
             });
 
         GuiCheckBox CreateToggle(string text, bool value, Action<bool> update, int y)

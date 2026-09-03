@@ -35,6 +35,7 @@ public sealed class FanMedalPresentationTests
         Assert.True(options.ShowDanmaku);
         Assert.True(options.ShowSuperChats);
         Assert.True(options.ShowGifts);
+        Assert.True(options.ShowGuards);
         Assert.True(options.IsDanmakuVisible("普通弹幕"));
     }
 

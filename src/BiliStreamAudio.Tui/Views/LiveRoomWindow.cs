@@ -38,6 +38,7 @@ internal sealed class LiveRoomWindow : Window
     private readonly LiveRoomDisplayOptions _displayOptions;
     private readonly Action _refreshStatusBar;
     private static readonly GuiAttribute GiftMessageAttribute = new(new GuiColor("#8ED8FF"), GuiColor.None);
+    private static readonly GuiAttribute GuardMessageAttribute = new(new GuiColor("#C994FF"), GuiColor.None);
     private static readonly Scheme SuperChatScrollButtonScheme = new(
         new GuiAttribute(GuiColor.White, GuiColor.None))
     {
@@ -303,7 +304,7 @@ internal sealed class LiveRoomWindow : Window
     {
         danmaku.EventReceived += (_, item) =>
         {
-            if (item is SuperChatEvent or SuperChatDeleteEvent or GiftEvent)
+            if (item is SuperChatEvent or SuperChatDeleteEvent or GiftEvent or GuardPurchaseEvent)
             {
                 _app.Invoke(() => HandleLiveEvent(item));
             }
@@ -728,6 +729,8 @@ internal sealed class LiveRoomWindow : Window
                     ? "Mock 礼物：gift <金额> <个数> <描述>"
                     : _mockMode && MockFanMedalCommand.IsCommand(inputText)
                         ? "Mock 勋章：badge <等级> <名称>"
+                    : _mockMode && MockGuardCommand.IsCommand(inputText)
+                        ? "Mock 上舰：guard <档位 1=总督/2=提督/3=舰长> <月数>"
                     : $"{CountDanmakuCharacters(inputText)}/{MaximumDanmakuLength}";
         }
         else
@@ -764,12 +767,23 @@ internal sealed class LiveRoomWindow : Window
             case GiftEvent gift:
                 AddGiftMessage(gift);
                 break;
+            case GuardPurchaseEvent guard:
+                AddGuardPurchaseMessage(guard);
+                break;
         }
     }
 
     private void AddGiftMessage(GiftEvent gift)
     {
         AddMessageItem(FormatGiftMessage(gift, _displayOptions.ShowGiftAmount), isGift: true);
+    }
+
+    private void AddGuardPurchaseMessage(GuardPurchaseEvent guard)
+    {
+        AddMessageItem(
+            FormatGuardPurchaseMessage(guard, _displayOptions.ShowGiftAmount),
+            isGift: true,
+            isGuard: true);
     }
 
     private void AddSuperChat(SuperChatEvent superChat)
@@ -1174,6 +1188,7 @@ internal sealed class LiveRoomWindow : Window
     private void AddMessageItem(
         string text,
         bool isGift = false,
+        bool isGuard = false,
         DanmakuEvent? danmaku = null,
         bool isDanmaku = false,
         string? danmakuMessage = null) =>
@@ -1181,6 +1196,7 @@ internal sealed class LiveRoomWindow : Window
             Guid.NewGuid(),
             text,
             isGift,
+            isGuard,
             addIfMissing: true,
             danmaku: danmaku,
             isDanmaku: isDanmaku,
@@ -1190,6 +1206,7 @@ internal sealed class LiveRoomWindow : Window
         Guid id,
         string text,
         bool isGift = false,
+        bool isGuard = false,
         bool addIfMissing = false,
         DanmakuEvent? danmaku = null,
         bool? isDanmaku = null,
@@ -1209,6 +1226,7 @@ internal sealed class LiveRoomWindow : Window
                 existing.SuperChat,
                 existing.SuperChatTier,
                 existing.IsGift,
+                existing.IsGuard,
                 danmaku ?? existing.Danmaku,
                 isDanmaku ?? existing.IsDanmaku,
                 danmakuMessage ?? existing.DanmakuMessage);
@@ -1226,6 +1244,7 @@ internal sealed class LiveRoomWindow : Window
             text,
             danmaku: danmaku,
             isGift: isGift,
+            isGuard: isGuard,
             isDanmaku: isDanmaku ?? false,
             danmakuMessage: danmakuMessage));
         while (_messageItems.Count > MaximumMessageCount)
@@ -1244,6 +1263,11 @@ internal sealed class LiveRoomWindow : Window
         if (item.SuperChat is not null)
         {
             return _displayOptions.ShowSuperChats;
+        }
+
+        if (item.IsGuard)
+        {
+            return _displayOptions.ShowGuards;
         }
 
         if (item.IsGift)
@@ -1266,10 +1290,28 @@ internal sealed class LiveRoomWindow : Window
         return $"✨ {userName}送出了{giftName}{countText}。{amountText}";
     }
 
+    internal static string FormatGuardPurchaseMessage(GuardPurchaseEvent guard, bool showAmount = false)
+    {
+        var userName = string.IsNullOrWhiteSpace(guard.UserName) ? "匿名用户" : guard.UserName;
+        var level = guard.GuardLevel switch
+        {
+            3 => "舰长",
+            2 => "提督",
+            1 => "总督",
+            _ => "舰队成员"
+        };
+        var count = Math.Max(1, guard.Count);
+        var amountText = showAmount && guard.Price > 0
+            ? $"￥{guard.AmountCny:0.##}"
+            : string.Empty;
+        return $"⚓ {userName}开通了{level} {count}个月。{amountText}";
+    }
+
     private static bool IsMockLiveEventCommand(string value) =>
         MockSuperChatCommand.IsCommand(value)
         || MockGiftCommand.IsCommand(value)
-        || MockFanMedalCommand.IsCommand(value);
+        || MockFanMedalCommand.IsCommand(value)
+        || MockGuardCommand.IsCommand(value);
 
     private sealed class DanmakuListDataSource : IListDataSource
     {
@@ -1381,7 +1423,7 @@ internal sealed class LiveRoomWindow : Window
             }
 
             return message.IsGift
-                ? GiftMessageAttribute
+                ? message.IsGuard ? GuardMessageAttribute : GiftMessageAttribute
                 : listView.GetAttributeForRole(VisualRole.Normal);
         }
 
@@ -1403,6 +1445,7 @@ internal sealed class LiveRoomWindow : Window
         SuperChatEvent? superChat = null,
         SuperChatTier? superChatTier = null,
         bool isGift = false,
+        bool isGuard = false,
         DanmakuEvent? danmaku = null,
         bool isDanmaku = false,
         string? danmakuMessage = null)
@@ -1411,6 +1454,7 @@ internal sealed class LiveRoomWindow : Window
         public SuperChatEvent? SuperChat { get; } = superChat;
         public SuperChatTier? SuperChatTier { get; } = superChatTier;
         public bool IsGift { get; } = isGift;
+        public bool IsGuard { get; } = isGuard;
         public DanmakuEvent? Danmaku { get; } = danmaku;
         public bool IsDanmaku { get; } = isDanmaku;
         public string DanmakuMessage { get; } = danmakuMessage ?? danmaku?.Message ?? string.Empty;

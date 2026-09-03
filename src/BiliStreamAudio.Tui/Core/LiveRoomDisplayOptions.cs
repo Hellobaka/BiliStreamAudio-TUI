@@ -26,6 +26,11 @@ public sealed class LiveRoomDisplayOptions
     public bool ShowGifts { get; set; } = true;
 
     /// <summary>
+    /// 是否显示上舰消息。
+    /// </summary>
+    public bool ShowGuards { get; set; } = true;
+
+    /// <summary>
     /// 是否在礼物消息中显示人民币金额。
     /// </summary>
     public bool ShowGiftAmount { get; set; } = true;
