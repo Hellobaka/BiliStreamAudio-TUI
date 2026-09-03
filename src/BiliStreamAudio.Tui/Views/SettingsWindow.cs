@@ -20,7 +20,7 @@ using GuiView = Terminal.Gui.ViewBase.View;
 
 namespace BiliStreamAudio.Tui.Views;
 
-internal sealed class SettingsWindow : Window
+internal sealed class SettingsWindow : ApplicationWindow
 {
     private static readonly string[] CategoryNames = ["账户", "通用配置", "状态栏设置", "关于"];
     private const int AboutBoxWidth = 48;

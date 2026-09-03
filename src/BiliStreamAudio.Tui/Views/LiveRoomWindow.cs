@@ -20,8 +20,9 @@ using GuiView = Terminal.Gui.ViewBase.View;
 
 namespace BiliStreamAudio.Tui.Views;
 
-internal sealed class LiveRoomWindow : Window
+internal sealed class LiveRoomWindow : ApplicationWindow
 {
+    protected override bool SuppressEscape => false;
     private const int MaximumMessageCount = 500;
     private const int MaximumDanmakuLength = 30;
     private const int SendCooldownSeconds = 3;

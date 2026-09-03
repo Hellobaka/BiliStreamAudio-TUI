@@ -6,7 +6,7 @@ using Terminal.Gui.Views;
 
 namespace BiliStreamAudio.Tui.Views;
 
-internal sealed class MainWindow : Window
+internal sealed class MainWindow : ApplicationWindow
 {
     private readonly Tabs _tabs;
     private readonly SpectrumStatusBarView _statusBar;
@@ -126,7 +126,7 @@ internal sealed class MainWindow : Window
     {
         var muteStatus = _audio.IsMuted ? " (静音)" : string.Empty;
         var mockStatus = _mockMode ? " · 模拟模式" : string.Empty;
-        _statusBar.SetStatus($"音量 {_audio.Volume}{muteStatus} · {_audio.State.ToDisplayText()}{mockStatus} · Esc 关闭直播间 · r 刷新 · m 静音 · +/- 音量 · l 登录 · Q/E 切换标签 · Ctrl+Q 退出");
+        _statusBar.SetStatus($"音量 {_audio.Volume}{muteStatus} · {_audio.State.ToDisplayText()}{mockStatus} · Esc 关闭直播间 · r 刷新 · m 静音 · +/- 音量 · l 登录 · Q/E 切换标签 · Ctrl+C 退出");
         _statusBar.SetBandCount(_displayOptions.SpectrumBandCount);
         _statusBar.SetColorMode(_displayOptions.SpectrumColorMode);
     }

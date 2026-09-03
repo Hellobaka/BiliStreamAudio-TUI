@@ -3,7 +3,7 @@ using Terminal.Gui.Views;
 
 namespace BiliStreamAudio.Tui.Views;
 
-internal sealed class PlaceholderWindow : Window
+internal sealed class PlaceholderWindow : ApplicationWindow
 {
     public PlaceholderWindow(string title, string message)
     {

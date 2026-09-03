@@ -13,7 +13,7 @@ using GuiColor = Terminal.Gui.Drawing.Color;
 
 namespace BiliStreamAudio.Tui.Views;
 
-internal sealed class BrowseWindow : Window
+internal sealed class BrowseWindow : ApplicationWindow
 {
     private readonly SearchLiveWindow _search;
 
@@ -40,7 +40,7 @@ internal sealed class BrowseWindow : Window
     public bool IsSearchInputFocused => _search.IsQueryFocused;
 }
 
-internal abstract class LiveListWindow : Window
+internal abstract class LiveListWindow : ApplicationWindow
 {
     private static readonly string[] LoadingFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     protected readonly IApplication _app;

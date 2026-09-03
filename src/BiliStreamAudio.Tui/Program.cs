@@ -107,8 +107,8 @@ internal static class Program
 
         app.Keyboard.KeyDown += (_, key) =>
         {
-            // Ctrl+Q remains available even when a text field owns the keyboard focus.
-            if (key == Key.Q.WithCtrl)
+            // Ctrl+C remains available even when a text field owns the keyboard focus.
+            if (key == Key.C.WithCtrl)
             {
                 app.RequestStop(mainWindow);
                 key.Handled = true;
