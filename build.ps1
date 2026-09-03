@@ -77,9 +77,10 @@ else {
             if (Test-Path $p) { Remove-Item $p -Recurse -Force }
         }
 
-        # Individual plugins inside shared categories. Audio codecs, audio
-        # output, audio filters, resamplers and the FLV/TS/fMP4/HLS demuxers
-        # are deliberately kept.
+        # Individual plugins inside shared categories. Audio codecs, filters,
+        # resamplers and the FLV/TS/fMP4/HLS demuxers are deliberately kept.
+        # Audio is rendered by NAudio/WASAPI from LibVLC's PCM callback, so the
+        # only LibVLC audio-output module that remains necessary is amem.
         $removeFiles = [ordered]@{
             'codec' = @(
                 # video codecs / hardware video decode
@@ -127,6 +128,11 @@ else {
             )
             'audio_filter' = @(
                 'libspatialaudio_plugin.dll', 'libspatializer_plugin.dll'
+            )
+            'audio_output' = @(
+                'libadummy_plugin.dll', 'libafile_plugin.dll',
+                'libdirectsound_plugin.dll', 'libmmdevice_plugin.dll',
+                'libwasapi_plugin.dll', 'libwaveout_plugin.dll'
             )
         }
 

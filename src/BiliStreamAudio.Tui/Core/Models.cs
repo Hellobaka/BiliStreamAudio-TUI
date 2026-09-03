@@ -34,6 +34,11 @@ public sealed record StreamDescriptor(
     string Codec = "",
     int? BitrateKbps = null);
 
+/// <summary>
+/// 一帧归一化后的频谱幅值。每个值的范围为 0 到 1。
+/// </summary>
+public sealed record SpectrumFrame(IReadOnlyList<float> Magnitudes);
+
 public sealed record AuthSession(
     IReadOnlyDictionary<string, string> Cookies,
     string? RefreshToken,

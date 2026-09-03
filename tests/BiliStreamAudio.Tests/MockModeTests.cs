@@ -40,6 +40,41 @@ public sealed class MockModeTests
     }
 
     [Fact]
+    public async Task Mock_audio_player_generates_a_spectrum_while_playing()
+    {
+        using var audio = new MockAudioPlayer();
+        var generated = new TaskCompletionSource<SpectrumFrame>(TaskCreationOptions.RunContinuationsAsynchronously);
+        audio.SpectrumChanged += (_, frame) =>
+        {
+            if (frame.Magnitudes.Count > 0)
+            {
+                generated.TrySetResult(frame);
+            }
+        };
+
+        await audio.PlayAsync(
+            new StreamDescriptor(new Uri("https://example.test/live.flv"), "http_stream", "flv", 0, true, 1000),
+            CancellationToken.None);
+        var spectrum = await generated.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(64, spectrum.Magnitudes.Count);
+        Assert.All(spectrum.Magnitudes, magnitude => Assert.InRange(magnitude, 0f, 1f));
+        Assert.True(spectrum.Magnitudes.Distinct().Count() > 1);
+    }
+
+    [Fact]
+    public void Real_AudioPlayer_constructor_registers_callbacks_without_crash()
+    {
+        // Smoke test: creating a real AudioPlayer must succeed.
+        // This exercises LibVLC initialization, SetAudioFormat, and SetAudioCallbacks
+        // to confirm that callback registration does not break the player init path.
+        using var audio = new AudioPlayer();
+        Assert.Equal(PlaybackState.Stopped, audio.State);
+        Assert.Equal(70, audio.Volume);
+        Assert.False(audio.IsMuted);
+    }
+
+    [Fact]
     public async Task Stopping_a_room_session_stops_playback_and_clears_the_room()
     {
         var audio = new MockAudioPlayer();

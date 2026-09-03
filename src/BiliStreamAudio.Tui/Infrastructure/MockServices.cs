@@ -138,17 +138,45 @@ internal sealed class MockLiveDirectoryService : ILiveDirectoryService
     }
 }
 
-internal sealed class MockAudioPlayer : IAudioPlayer
+internal sealed class MockAudioPlayer : IAudioPlayer, IAudioSpectrumSource
 {
+    private const int SpectrumSampleCount = 64;
+
     private PlaybackState _state = PlaybackState.Stopped;
     private int _volume = 70;
     private bool _muted;
+    private readonly object _spectrumLock = new();
+    private readonly float[] _spectrumMagnitudes = new float[SpectrumSampleCount];
+    private readonly System.Threading.Timer _spectrumTimer;
+    private float _spectrumPhase;
 
     public event EventHandler<PlaybackState>? StateChanged;
+    public event EventHandler<SpectrumFrame>? SpectrumChanged;
+
+    public MockAudioPlayer()
+    {
+        _spectrumTimer = new System.Threading.Timer(
+            UpdateSpectrum,
+            null,
+            Timeout.InfiniteTimeSpan,
+            Timeout.InfiniteTimeSpan);
+    }
 
     public PlaybackState State => _state;
     public int Volume => _volume;
     public bool IsMuted => _muted;
+    public SpectrumFrame? CurrentSpectrum
+    {
+        get
+        {
+            lock (_spectrumLock)
+            {
+                return _state == PlaybackState.Playing
+                    ? new SpectrumFrame(_spectrumMagnitudes.ToArray())
+                    : null;
+            }
+        }
+    }
 
     public Task PlayAsync(StreamDescriptor stream, CancellationToken cancellationToken)
     {
@@ -170,6 +198,7 @@ internal sealed class MockAudioPlayer : IAudioPlayer
 
     public void Dispose()
     {
+        _spectrumTimer.Dispose();
     }
 
     private void SetState(PlaybackState state)
@@ -181,6 +210,44 @@ internal sealed class MockAudioPlayer : IAudioPlayer
 
         _state = state;
         StateChanged?.Invoke(this, state);
+        if (state == PlaybackState.Playing)
+        {
+            _spectrumTimer.Change(TimeSpan.Zero, TimeSpan.FromMilliseconds(80));
+        }
+        else
+        {
+            _spectrumTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            SpectrumChanged?.Invoke(this, new SpectrumFrame([]));
+        }
+    }
+
+    private void UpdateSpectrum(object? state)
+    {
+        if (_state != PlaybackState.Playing)
+        {
+            return;
+        }
+
+        SpectrumFrame spectrum;
+        lock (_spectrumLock)
+        {
+            _spectrumPhase += 0.23f;
+            for (var index = 0; index < _spectrumMagnitudes.Length; index++)
+            {
+                var position = index / (float)_spectrumMagnitudes.Length;
+                var wave = MathF.Sin(_spectrumPhase + position * 18f) * 0.18f + 0.24f;
+                var movingPeak = MathF.Exp(-MathF.Pow(position - (0.5f + MathF.Sin(_spectrumPhase * 0.37f) * 0.3f), 2f) / 0.012f);
+                var target = Math.Clamp(wave + movingPeak * 0.6f + Random.Shared.NextSingle() * 0.22f, 0f, 1f);
+                _spectrumMagnitudes[index] = Math.Clamp(
+                    _spectrumMagnitudes[index] * 0.56f + target * 0.44f,
+                    0f,
+                    1f);
+            }
+
+            spectrum = new SpectrumFrame(_spectrumMagnitudes.ToArray());
+        }
+
+        SpectrumChanged?.Invoke(this, spectrum);
     }
 }
 

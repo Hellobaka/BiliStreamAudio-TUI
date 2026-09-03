@@ -116,3 +116,14 @@ public interface IAudioPlayer : IDisposable
     void SetVolume(int volume);
     void ToggleMute();
 }
+
+/// <summary>
+/// 可选的音频频谱数据源。真实播放器接入 PCM 分析后可实现此接口，
+/// 而不影响 <see cref="IAudioPlayer"/> 的播放职责。
+/// </summary>
+public interface IAudioSpectrumSource
+{
+    event EventHandler<SpectrumFrame>? SpectrumChanged;
+
+    SpectrumFrame? CurrentSpectrum { get; }
+}

@@ -3,16 +3,16 @@ using Terminal.Gui.App;
 using Terminal.Gui.Drawing;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
-using GuiLabel = Terminal.Gui.Views.Label;
 
 namespace BiliStreamAudio.Tui.Views;
 
 internal sealed class MainWindow : Window
 {
     private readonly Tabs _tabs;
-    private readonly GuiLabel _statusBar;
+    private readonly SpectrumStatusBarView _statusBar;
     private readonly IAudioPlayer _audio;
     private readonly bool _mockMode;
+    private readonly LiveRoomDisplayOptions _displayOptions;
 
     public MainWindow(
         IApplication app,
@@ -36,12 +36,14 @@ internal sealed class MainWindow : Window
         BorderStyle = LineStyle.None;
         _audio = audio;
         _mockMode = mockMode;
+        _displayOptions = liveRoomDisplayOptions;
 
-        _statusBar = new GuiLabel
+        _statusBar = new SpectrumStatusBarView
         {
             X = 1,
             Y = Pos.AnchorEnd(1),
-            Width = Dim.Fill(2)
+            Width = Dim.Fill(2),
+            Height = 1
         };
         LiveRoom = new LiveRoomWindow(
             app,
@@ -65,7 +67,11 @@ internal sealed class MainWindow : Window
         };
         Browse = new BrowseWindow(app, directory, rooms, session, ShowLiveRoom);
         var playbackHistory = new PlaybackHistoryWindow(app, history, rooms, session, ShowLiveRoom);
-        var settings = new SettingsWindow(liveRoomDisplayOptions, LiveRoom.RefreshDisplay);
+        var settings = new SettingsWindow(liveRoomDisplayOptions, () =>
+        {
+            LiveRoom.RefreshDisplay();
+            RefreshStatusBar();
+        });
         _tabs.Add(
             LiveRoom,
             Browse,
@@ -84,6 +90,11 @@ internal sealed class MainWindow : Window
         };
         _tabs.Value = LiveRoom;
         audio.StateChanged += (_, _) => app.Invoke(RefreshStatusBar);
+        if (audio is IAudioSpectrumSource spectrumSource)
+        {
+            spectrumSource.SpectrumChanged += (_, spectrum) => app.Invoke(() => _statusBar.SetSpectrum(spectrum));
+            _statusBar.SetSpectrum(spectrumSource.CurrentSpectrum);
+        }
         RefreshStatusBar();
 
         Add(_tabs, _statusBar);
@@ -112,8 +123,9 @@ internal sealed class MainWindow : Window
     {
         var muteStatus = _audio.IsMuted ? " (静音)" : string.Empty;
         var mockStatus = _mockMode ? " · 模拟模式" : string.Empty;
-        _statusBar.Text = $"音量 {_audio.Volume}{muteStatus} · {_audio.State.ToDisplayText()}{mockStatus} · Esc 关闭直播间 · r 刷新 · m 静音 · +/- 音量 · l 登录 · Q/E 切换标签 · Ctrl+Q 退出";
-        _statusBar.SetNeedsDraw();
+        _statusBar.SetStatus($"音量 {_audio.Volume}{muteStatus} · {_audio.State.ToDisplayText()}{mockStatus} · Esc 关闭直播间 · r 刷新 · m 静音 · +/- 音量 · l 登录 · Q/E 切换标签 · Ctrl+Q 退出");
+        _statusBar.SetBandCount(_displayOptions.SpectrumBandCount);
+        _statusBar.SetColorMode(_displayOptions.SpectrumColorMode);
     }
 
     private void SelectTab(int offset)

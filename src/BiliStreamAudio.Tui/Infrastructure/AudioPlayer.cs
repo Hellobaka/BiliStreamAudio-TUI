@@ -1,16 +1,32 @@
 using BiliStreamAudio.Tui.Core;
 using LibVLCSharp.Shared;
+using NAudio.CoreAudioApi;
 using Serilog;
+using System.Buffers;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using BufferedWaveProvider = NAudio.Wave.BufferedWaveProvider;
+using WasapiOut = NAudio.Wave.WasapiOut;
+using WaveFormat = NAudio.Wave.WaveFormat;
 
 namespace BiliStreamAudio.Tui.Infrastructure;
 
-public sealed class AudioPlayer : IAudioPlayer
+public sealed class AudioPlayer : IAudioPlayer, IAudioSpectrumSource
 {
     private const string LiveReferrer = "https://live.bilibili.com/";
+    private const int SampleRate = 48_000;
+    private const int Channels = 2;
+    private const int BitsPerSample = 16;
 
     private readonly LibVLC _vlc;
     private readonly MediaPlayer _player;
+    private readonly BufferedWaveProvider _audioBuffer = new(new WaveFormat(SampleRate, BitsPerSample, Channels))
+    {
+        BufferDuration = TimeSpan.FromMilliseconds(500),
+        DiscardOnBufferOverflow = true,
+        ReadFully = true
+    };
+    private readonly AudioSpectrumAnalyzer _spectrumAnalyzer = new();
     private readonly PlaybackReadiness _readiness = new();
     private PlaybackState _state = PlaybackState.Stopped;
     private int _volume = 70;
@@ -19,6 +35,7 @@ public sealed class AudioPlayer : IAudioPlayer
     private bool _bufferingLogged;
     private bool _clockStartedLogged;
     private bool _playingLogged;
+    private WasapiOut? _audioOutput;
 
     public AudioPlayer()
     {
@@ -41,13 +58,26 @@ public sealed class AudioPlayer : IAudioPlayer
         _player.TimeChanged += OnTimeChanged;
         _player.EncounteredError += (_, _) => SetState(PlaybackState.Error);
         _player.Stopped += (_, _) => SetState(PlaybackState.Stopped);
+        _player.SetAudioFormat("S16N", SampleRate, Channels);
+        _player.SetAudioCallbacks(
+            (data, samples, count, pts) => OnAudioPlay(samples, count),
+            (data, pts) => _audioOutput?.Pause(),
+            (data, pts) => _audioOutput?.Play(),
+            (data, pts) => _audioBuffer.ClearBuffer(),
+            data => { });
     }
 
     public event EventHandler<PlaybackState>? StateChanged;
+    public event EventHandler<SpectrumFrame>? SpectrumChanged
+    {
+        add => _spectrumAnalyzer.SpectrumChanged += value;
+        remove => _spectrumAnalyzer.SpectrumChanged -= value;
+    }
 
     public PlaybackState State => _state;
     public int Volume => _volume;
     public bool IsMuted => _muted;
+    public SpectrumFrame? CurrentSpectrum => _spectrumAnalyzer.CurrentSpectrum;
 
     public Task PlayAsync(StreamDescriptor stream, CancellationToken cancellationToken)
     {
@@ -71,8 +101,14 @@ public sealed class AudioPlayer : IAudioPlayer
             media.AddOption(option);
         }
 
+        _audioBuffer.ClearBuffer();
+        _spectrumAnalyzer.Start();
+        EnsureAudioOutput().Play();
         if (!_player.Play(media))
         {
+            _audioOutput?.Stop();
+            _audioBuffer.ClearBuffer();
+            _spectrumAnalyzer.Stop();
             throw new InvalidOperationException("音频播放器无法启动直播流。");
         }
 
@@ -87,6 +123,9 @@ public sealed class AudioPlayer : IAudioPlayer
         _clockStartedLogged = false;
         _playingLogged = false;
         _player.Stop();
+        _audioOutput?.Stop();
+        _audioBuffer.ClearBuffer();
+        _spectrumAnalyzer.Stop();
         return Task.CompletedTask;
     }
 
@@ -171,6 +210,44 @@ public sealed class AudioPlayer : IAudioPlayer
             elapsed is { } seconds ? $"{seconds:F1} 秒" : "未知");
     }
 
+    private WasapiOut EnsureAudioOutput()
+    {
+        if (_audioOutput is not null)
+        {
+            return _audioOutput;
+        }
+
+        var output = new WasapiOut(AudioClientShareMode.Shared, useEventSync: true, latency: 100);
+        output.Init(_audioBuffer);
+        _audioOutput = output;
+        return output;
+    }
+
+    private void OnAudioPlay(IntPtr samples, uint count)
+    {
+        var byteCount = checked((int)(count * Channels * (BitsPerSample / 8)));
+        if (byteCount == 0)
+        {
+            return;
+        }
+
+        var managedSamples = ArrayPool<byte>.Shared.Rent(byteCount);
+        try
+        {
+            Marshal.Copy(samples, managedSamples, 0, byteCount);
+            _audioBuffer.AddSamples(managedSamples, 0, byteCount);
+            _spectrumAnalyzer.PushPcm16Stereo(managedSamples, byteCount);
+        }
+        catch (Exception exception)
+        {
+            Log.Error(exception, "写入 LibVLC PCM 音频回调失败");
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(managedSamples);
+        }
+    }
+
     private static void OnVlcLog(object? sender, LogEventArgs args)
     {
         var message = VlcLogSanitizer.Sanitize(args.Message);
@@ -198,6 +275,8 @@ public sealed class AudioPlayer : IAudioPlayer
         _player.TimeChanged -= OnTimeChanged;
         _player.Dispose();
         _vlc.Dispose();
+        _audioOutput?.Dispose();
+        _spectrumAnalyzer.Dispose();
     }
 }
 
