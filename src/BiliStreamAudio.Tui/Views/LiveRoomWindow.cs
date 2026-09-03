@@ -26,7 +26,7 @@ internal sealed class LiveRoomWindow : ApplicationWindow
     private const int MaximumMessageCount = 500;
     private const int MaximumDanmakuLength = 30;
     private const int SendCooldownSeconds = 3;
-    private const string DanmakuInputUnavailableText = "请先在“浏览”页面选择直播间并登录，然后发送弹幕。";
+    private const string DanmakuInputUnavailableText = "请先在“浏览”页面选择直播间，并在“设置”页面登录，然后发送弹幕。";
 
     private readonly IApplication _app;
     private readonly RoomSession _session;
@@ -479,11 +479,6 @@ internal sealed class LiveRoomWindow : ApplicationWindow
                 _refreshStatusBar();
                 key.Handled = true;
             }
-            else if (key == Key.L || key == Key.L.WithShift)
-            {
-                _ = LoginAsync();
-                key.Handled = true;
-            }
         };
     }
 
@@ -508,21 +503,6 @@ internal sealed class LiveRoomWindow : ApplicationWindow
             () => _session.StopAsync(),
             AddMessage,
             () => _app.Invoke(_closeLiveRoom));
-    }
-
-    private async Task LoginAsync()
-    {
-        try
-        {
-            await _auth.LoginAsync(CancellationToken.None).ConfigureAwait(false);
-            AddMessage($"已登录：{_auth.Current?.UserName}");
-            _app.Invoke(RefreshHeader);
-        }
-        catch (Exception exception)
-        {
-            Log.Error(exception, "Official login window failed");
-            AddMessage($"登录失败：{exception.ToDisplayText()}");
-        }
     }
 
     private async Task SendDanmakuAsync(long roomId, string text)
