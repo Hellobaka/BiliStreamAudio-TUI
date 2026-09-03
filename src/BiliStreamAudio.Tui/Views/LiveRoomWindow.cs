@@ -174,7 +174,7 @@ internal sealed class LiveRoomWindow : Window
             X = 1,
             Y = 2,
             Width = Dim.Fill(2),
-            Height = Dim.Fill(7),
+            Height = Dim.Fill(3),
             ViewportSettings = ViewportSettingsFlags.HasVerticalScrollBar
         };
         _messages.Source = new DanmakuListDataSource(_messageItems, () => _displayOptions.ShowFanMedals);

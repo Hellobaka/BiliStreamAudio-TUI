@@ -186,21 +186,141 @@ internal sealed class MockAudioPlayer : IAudioPlayer
 
 internal sealed class MockDanmakuConnection : IDanmakuConnection
 {
+    private static readonly string[] UserNamePrefixes =
+    [
+        "星", "云", "小", "阿", "白", "柚", "夏", "夜"
+    ];
+
+    private static readonly string[] UserNameSuffixes =
+    [
+        "团子", "汽水", "海盐", "奶糖", "旅人", "鲸鱼", "猫", "同学"
+    ];
+
+    private static readonly string[] Messages =
+    [
+        "来了来了", "这个节目真不错", "主播晚上好", "好听！", "前排打卡", "今天也很开心",
+        "哈哈哈哈", "支持一下", "这段我喜欢", "路过留个爪印"
+    ];
+
+    private static readonly string[] MedalNames =
+    [
+        "星光团", "小北团", "夜聊会", "游玩团", "绮梦团"
+    ];
+
+    private static readonly string[] GiftNames =
+    [
+        "辣条", "小花花", "能量石", "告白气球", "星愿瓶"
+    ];
+
+    private static readonly long[] GiftPrices = [100, 500, 1000, 5000];
+
+    private static readonly string[] SuperChatMessages =
+    [
+        "主播辛苦啦，今晚的节目很喜欢！", "第一次来，留下一张 SC 支持一下。",
+        "这段分享太有意思了，继续加油！", "送给直播间的每一位朋友。"
+    ];
+
+    private static readonly int[] SuperChatPrices = [30, 50, 100, 300];
+
+    private readonly object _gate = new();
+    private readonly TimeSpan _minimumInterval;
+    private readonly TimeSpan _maximumInterval;
+    private readonly TimeSpan _minimumGiftInterval;
+    private readonly TimeSpan _maximumGiftInterval;
+    private readonly TimeSpan _minimumSuperChatInterval;
+    private readonly TimeSpan _maximumSuperChatInterval;
+    private CancellationTokenSource? _pushLifetime;
+    private Task? _pushTask;
+    private bool _disposed;
+
+    public MockDanmakuConnection(
+        TimeSpan? minimumInterval = null,
+        TimeSpan? maximumInterval = null,
+        TimeSpan? minimumGiftInterval = null,
+        TimeSpan? maximumGiftInterval = null,
+        TimeSpan? minimumSuperChatInterval = null,
+        TimeSpan? maximumSuperChatInterval = null)
+    {
+        _minimumInterval = minimumInterval ?? TimeSpan.FromMilliseconds(800);
+        _maximumInterval = maximumInterval ?? TimeSpan.FromMilliseconds(1800);
+        _minimumGiftInterval = minimumGiftInterval ?? TimeSpan.FromSeconds(6);
+        _maximumGiftInterval = maximumGiftInterval ?? TimeSpan.FromSeconds(15);
+        _minimumSuperChatInterval = minimumSuperChatInterval ?? TimeSpan.FromSeconds(25);
+        _maximumSuperChatInterval = maximumSuperChatInterval ?? TimeSpan.FromSeconds(45);
+
+        ValidateInterval(_minimumInterval, _maximumInterval, nameof(minimumInterval), nameof(maximumInterval));
+        ValidateInterval(_minimumGiftInterval, _maximumGiftInterval, nameof(minimumGiftInterval), nameof(maximumGiftInterval));
+        ValidateInterval(
+            _minimumSuperChatInterval,
+            _maximumSuperChatInterval,
+            nameof(minimumSuperChatInterval),
+            nameof(maximumSuperChatInterval));
+    }
+
     public event EventHandler<LiveEvent>? EventReceived;
     public event EventHandler<DanmakuEvent>? Received;
     public event EventHandler<string>? StatusChanged;
 
-    public Task ConnectAsync(LiveRoom room, CancellationToken cancellationToken)
+    public async Task ConnectAsync(LiveRoom room, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        await DisconnectAsync().ConfigureAwait(false);
+
+        var pushLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _pushLifetime = pushLifetime;
+            _pushTask = Task.WhenAll(
+                PushGeneratedDanmakuAsync(pushLifetime.Token),
+                PushGeneratedGiftsAsync(pushLifetime.Token),
+                PushGeneratedSuperChatsAsync(pushLifetime.Token));
+        }
+
         StatusChanged?.Invoke(this, "弹幕模拟已连接");
         Publish("系统", $"已进入模拟直播间 {room.RoomId}");
-        return Task.CompletedTask;
     }
 
-    public Task DisconnectAsync() => Task.CompletedTask;
+    public async Task DisconnectAsync()
+    {
+        CancellationTokenSource? pushLifetime;
+        Task? pushTask;
+        lock (_gate)
+        {
+            pushLifetime = _pushLifetime;
+            pushTask = _pushTask;
+            _pushLifetime = null;
+            _pushTask = null;
+        }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        if (pushLifetime is null)
+        {
+            return;
+        }
+
+        pushLifetime.Cancel();
+        try
+        {
+            if (pushTask is not null)
+            {
+                await pushTask.ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            pushLifetime.Dispose();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        lock (_gate)
+        {
+            _disposed = true;
+        }
+
+        await DisconnectAsync().ConfigureAwait(false);
+    }
 
     public void Publish(string userName, string message)
     {
@@ -215,6 +335,158 @@ internal sealed class MockDanmakuConnection : IDanmakuConnection
             Received?.Invoke(this, danmaku);
         }
     }
+
+    private async Task PushGeneratedDanmakuAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(
+                    GetRandomInterval(_minimumInterval, _maximumInterval),
+                    cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                Publish(CreateRandomDanmaku());
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task PushGeneratedGiftsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(
+                    GetRandomInterval(_minimumGiftInterval, _maximumGiftInterval),
+                    cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                Publish(CreateRandomGift());
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task PushGeneratedSuperChatsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(
+                    GetRandomInterval(_minimumSuperChatInterval, _maximumSuperChatInterval),
+                    cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                Publish(CreateRandomSuperChat());
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private static void ValidateInterval(
+        TimeSpan minimum,
+        TimeSpan maximum,
+        string minimumParameterName,
+        string maximumParameterName)
+    {
+        if (minimum <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(minimumParameterName);
+        }
+
+        if (maximum < minimum)
+        {
+            throw new ArgumentOutOfRangeException(maximumParameterName);
+        }
+    }
+
+    private static TimeSpan GetRandomInterval(TimeSpan minimum, TimeSpan maximum)
+    {
+        var range = maximum - minimum;
+        return range <= TimeSpan.Zero
+            ? minimum
+            : minimum + TimeSpan.FromMilliseconds(Random.Shared.NextDouble() * range.TotalMilliseconds);
+    }
+
+    private static DanmakuEvent CreateRandomDanmaku()
+    {
+        var user = CreateRandomUser();
+        var medal = Random.Shared.Next(100) < 45 ? null : new FanMedal(
+            Random.Shared.NextInt64(1, long.MaxValue),
+            Random.Shared.GetItems(MedalNames, 1)[0],
+            Random.Shared.Next(1, 31),
+            Random.Shared.NextInt64(1, long.MaxValue),
+            "Mock_主播",
+            0,
+            true,
+            0,
+            0,
+            0,
+            0,
+            0,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty);
+
+        return new DanmakuEvent(
+            user.UserName,
+            Random.Shared.GetItems(Messages, 1)[0],
+            DateTimeOffset.Now,
+            UserId: user.UserId,
+            Medal: medal);
+    }
+
+    private static GiftEvent CreateRandomGift()
+    {
+        var user = CreateRandomUser();
+        var count = Random.Shared.Next(1, 6);
+        var unitPrice = Random.Shared.GetItems(GiftPrices, 1)[0];
+        return new GiftEvent(
+            user.UserId,
+            user.UserName,
+            Random.Shared.NextInt64(1, long.MaxValue),
+            Random.Shared.GetItems(GiftNames, 1)[0],
+            count,
+            unitPrice,
+            unitPrice * count,
+            "gold",
+            Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture),
+            string.Empty,
+            DateTimeOffset.Now);
+    }
+
+    private static SuperChatEvent CreateRandomSuperChat()
+    {
+        var user = CreateRandomUser();
+        var price = Random.Shared.GetItems(SuperChatPrices, 1)[0];
+        var now = DateTimeOffset.Now;
+        return new SuperChatEvent(
+            Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture),
+            user.UserId,
+            user.UserName,
+            Random.Shared.GetItems(SuperChatMessages, 1)[0],
+            string.Empty,
+            string.Empty,
+            price,
+            now,
+            now.Add(SuperChatPresentation.GetLifetime(price)),
+            price * 2);
+    }
+
+    private static (long UserId, string UserName) CreateRandomUser() => (
+        Random.Shared.NextInt64(1, long.MaxValue),
+        $"{Random.Shared.GetItems(UserNamePrefixes, 1)[0]}{Random.Shared.GetItems(UserNameSuffixes, 1)[0]}");
 }
 
 internal static class MockSuperChatCommand
@@ -302,6 +574,7 @@ internal static class MockGiftCommand
 internal static class MockFanMedalCommand
 {
     private const string Prefix = "badge";
+    private const int MaximumNameWidth = 6;
 
     public static bool IsCommand(string value) =>
         value.Equals(Prefix, StringComparison.OrdinalIgnoreCase)
@@ -313,9 +586,10 @@ internal static class MockFanMedalCommand
         if (parts.Length != 3
             || !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var level)
             || level < 0
-            || string.IsNullOrWhiteSpace(parts[2]))
+            || string.IsNullOrWhiteSpace(parts[2])
+            || GetNameWidth(parts[2]) > MaximumNameWidth)
         {
-            throw new ArgumentException("Mock 勋章格式应为：badge <非负等级> <名称>。", nameof(value));
+            throw new ArgumentException("Mock 勋章格式应为：badge <非负等级> <最多 6 个英文或 3 个中文字符的名称>。", nameof(value));
         }
 
         return new FanMedal(
@@ -339,6 +613,9 @@ internal static class MockFanMedalCommand
             string.Empty,
             string.Empty);
     }
+
+    private static int GetNameWidth(string name) => name.EnumerateRunes().Sum(rune =>
+        rune.Value is <= 0x7f ? 1 : 2);
 }
 
 internal sealed class MockHistoryStore : IHistoryStore

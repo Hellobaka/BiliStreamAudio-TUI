@@ -20,8 +20,8 @@ public sealed class MockModeTests
     {
         var audio = new MockAudioPlayer();
         var danmaku = new MockDanmakuConnection();
-        var received = new List<DanmakuEvent>();
-        danmaku.Received += (_, item) => received.Add(item);
+        var received = new System.Collections.Concurrent.ConcurrentQueue<DanmakuEvent>();
+        danmaku.Received += (_, item) => received.Enqueue(item);
         var auth = new MockAuthService();
         var sender = new MockDanmakuSender(danmaku);
 
@@ -37,6 +37,73 @@ public sealed class MockModeTests
         Assert.Equal(PlaybackState.Playing, audio.State);
         Assert.Equal("模拟直播间 1000", session.Room?.Title);
         Assert.Contains(received, item => item.Message == "测试弹幕");
+    }
+
+    [Fact]
+    public async Task Mock_danmaku_is_generated_only_while_connected()
+    {
+        await using var connection = new MockDanmakuConnection(
+            TimeSpan.FromMilliseconds(5),
+            TimeSpan.FromMilliseconds(10));
+        var generated = new TaskCompletionSource<DanmakuEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var receivedCount = 0;
+        connection.Received += (_, item) =>
+        {
+            if (item.UserName != "系统")
+            {
+                Interlocked.Increment(ref receivedCount);
+                generated.TrySetResult(item);
+            }
+        };
+
+        await connection.ConnectAsync(
+            new LiveRoom(1000, 1000, 1, "模拟直播间", "Mock_主播", true),
+            CancellationToken.None);
+
+        var item = await generated.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        await connection.DisconnectAsync();
+        var countAfterDisconnect = Volatile.Read(ref receivedCount);
+        await Task.Delay(TimeSpan.FromMilliseconds(50));
+
+        Assert.NotEqual("系统", item.UserName);
+        Assert.NotEmpty(item.Message);
+        Assert.Equal(countAfterDisconnect, Volatile.Read(ref receivedCount));
+    }
+
+    [Fact]
+    public async Task Mock_connection_generates_gifts_and_super_chats_while_connected()
+    {
+        await using var connection = new MockDanmakuConnection(
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromMilliseconds(5),
+            TimeSpan.FromMilliseconds(10),
+            TimeSpan.FromMilliseconds(5),
+            TimeSpan.FromMilliseconds(10));
+        var gift = new TaskCompletionSource<GiftEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var superChat = new TaskCompletionSource<SuperChatEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.EventReceived += (_, item) =>
+        {
+            if (item is GiftEvent receivedGift)
+            {
+                gift.TrySetResult(receivedGift);
+            }
+            else if (item is SuperChatEvent receivedSuperChat)
+            {
+                superChat.TrySetResult(receivedSuperChat);
+            }
+        };
+
+        await connection.ConnectAsync(
+            new LiveRoom(1000, 1000, 1, "模拟直播间", "Mock_主播", true),
+            CancellationToken.None);
+
+        await Task.WhenAll(
+            gift.Task.WaitAsync(TimeSpan.FromSeconds(1)),
+            superChat.Task.WaitAsync(TimeSpan.FromSeconds(1)));
+
+        Assert.True((await gift.Task).AmountCny > 0);
+        Assert.True((await superChat.Task).PriceCny > 0);
     }
 
     [Fact]
@@ -164,6 +231,8 @@ public sealed class MockModeTests
     [InlineData("badge -1 测试团")]
     [InlineData("badge 17")]
     [InlineData("badge 等级 测试团")]
+    [InlineData("badge 17 测试后援团")]
+    [InlineData("badge 17 fanclub")]
     public async Task Mock_badge_command_rejects_invalid_level_or_missing_name(string command)
     {
         var sender = new MockDanmakuSender(new MockDanmakuConnection());
