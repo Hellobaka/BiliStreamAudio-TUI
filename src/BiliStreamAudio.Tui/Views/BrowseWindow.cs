@@ -16,6 +16,7 @@ namespace BiliStreamAudio.Tui.Views;
 internal sealed class BrowseWindow : ApplicationWindow
 {
     private readonly SearchLiveWindow _search;
+    private readonly Tabs _tabs;
 
     public BrowseWindow(
         IApplication app,
@@ -25,7 +26,7 @@ internal sealed class BrowseWindow : ApplicationWindow
         Action showLiveRoom)
     {
         Title = "浏览";
-        var tabs = new Tabs
+        _tabs = new Tabs
         {
             X = 0,
             Y = 0,
@@ -33,11 +34,18 @@ internal sealed class BrowseWindow : ApplicationWindow
             Height = Dim.Fill()
         };
         _search = new SearchLiveWindow(app, directory, rooms, session, showLiveRoom);
-        tabs.Add(new FollowedLiveWindow(app, directory, session, showLiveRoom), _search);
-        Add(tabs);
+        _tabs.Add(new FollowedLiveWindow(app, directory, session, showLiveRoom), _search);
+        _tabs.ValueChanged += (_, _) => ShortcutHintChanged?.Invoke();
+        Add(_tabs);
     }
 
     public bool IsSearchInputFocused => _search.IsQueryFocused;
+
+    public string ShortcutHint => ReferenceEquals(_tabs.Value, _search)
+        ? "搜索：Enter 搜索/播放"
+        : "关注：r 刷新 · Enter 播放";
+
+    public event Action? ShortcutHintChanged;
 }
 
 internal abstract class LiveListWindow : ApplicationWindow

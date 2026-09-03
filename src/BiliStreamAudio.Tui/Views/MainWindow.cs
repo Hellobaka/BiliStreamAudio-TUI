@@ -10,6 +10,7 @@ internal sealed class MainWindow : ApplicationWindow
 {
     private readonly Tabs _tabs;
     private readonly SpectrumStatusBarView _statusBar;
+    private readonly PlaybackHistoryWindow _playbackHistory;
     private readonly IAudioPlayer _audio;
     private readonly ISettingsStore _settingsStore;
     private readonly bool _mockMode;
@@ -70,7 +71,7 @@ internal sealed class MainWindow : ApplicationWindow
             Height = Dim.Fill(1)
         };
         Browse = new BrowseWindow(app, directory, rooms, session, ShowLiveRoom);
-        var playbackHistory = new PlaybackHistoryWindow(app, history, rooms, session, ShowLiveRoom);
+        _playbackHistory = new PlaybackHistoryWindow(app, history, rooms, session, ShowLiveRoom);
         Settings = new SettingsWindow(app, liveRoomDisplayOptions, audio, () =>
         {
             LiveRoom.RefreshDisplay();
@@ -79,18 +80,21 @@ internal sealed class MainWindow : ApplicationWindow
         _tabs.Add(
             LiveRoom,
             Browse,
-            playbackHistory,
+            _playbackHistory,
             Settings);
+        Browse.ShortcutHintChanged += RefreshStatusBar;
         _tabs.ValueChanged += (_, args) =>
         {
-            if (ReferenceEquals(args.NewValue, playbackHistory))
+            if (ReferenceEquals(args.NewValue, _playbackHistory))
             {
-                playbackHistory.Load();
+                _playbackHistory.Load();
             }
             else if (ReferenceEquals(args.NewValue, LiveRoom))
             {
                 LiveRoom.FocusInput();
             }
+
+            RefreshStatusBar();
         };
         _tabs.Value = LiveRoom;
         audio.StateChanged += (_, _) => app.Invoke(RefreshStatusBar);
@@ -129,9 +133,29 @@ internal sealed class MainWindow : ApplicationWindow
     {
         var muteStatus = _audio.IsMuted ? " (静音)" : string.Empty;
         var mockStatus = _mockMode ? " · 模拟模式" : string.Empty;
-        _statusBar.SetStatus($"音量 {_audio.Volume}{muteStatus} · {_audio.State.ToDisplayText()}{mockStatus} · Esc 关闭直播间 · r 刷新 · m 静音 · +/- 音量 · l 登录 · Q/E 切换标签 · Ctrl+C 退出");
+        _statusBar.SetStatus($"音量 {_audio.Volume}{muteStatus} · {_audio.State.ToDisplayText()}{mockStatus} · {GetShortcutHint()} · Q/E 切换标签 · Ctrl+C 退出");
         _statusBar.SetBandCount(_displayOptions.SpectrumBandCount);
         _statusBar.SetColorMode(_displayOptions.SpectrumColorMode);
+    }
+
+    private string GetShortcutHint()
+    {
+        if (ReferenceEquals(_tabs.Value, LiveRoom))
+        {
+            return "Esc 关闭直播间 · r 刷新 · m 静音 · +/- 音量";
+        }
+
+        if (ReferenceEquals(_tabs.Value, Browse))
+        {
+            return Browse.ShortcutHint;
+        }
+
+        if (ReferenceEquals(_tabs.Value, _playbackHistory))
+        {
+            return "r 刷新 · Enter 播放/删除";
+        }
+
+        return "Alt+1~4 切换分类 · 方向键导航 · Enter 操作";
     }
 
     private void PersistVolume()
