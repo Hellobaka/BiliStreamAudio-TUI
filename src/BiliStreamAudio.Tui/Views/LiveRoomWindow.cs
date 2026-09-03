@@ -37,6 +37,7 @@ internal sealed class LiveRoomWindow : Window
     private readonly bool _mockMode;
     private readonly LiveRoomDisplayOptions _displayOptions;
     private readonly Action _refreshStatusBar;
+    private readonly Action _closeLiveRoom;
     private static readonly GuiAttribute GiftMessageAttribute = new(new GuiColor("#8ED8FF"), GuiColor.None);
     private static readonly GuiAttribute GuardMessageAttribute = new(new GuiColor("#C994FF"), GuiColor.None);
     private static readonly Scheme SuperChatScrollButtonScheme = new(
@@ -82,7 +83,8 @@ internal sealed class LiveRoomWindow : Window
         IHistoryStore history,
         bool mockMode,
         LiveRoomDisplayOptions displayOptions,
-        Action refreshStatusBar)
+        Action refreshStatusBar,
+        Action closeLiveRoom)
     {
         _app = app;
         _session = session;
@@ -94,6 +96,7 @@ internal sealed class LiveRoomWindow : Window
         _mockMode = mockMode;
         _displayOptions = displayOptions;
         _refreshStatusBar = refreshStatusBar;
+        _closeLiveRoom = closeLiveRoom;
 
         Title = "直播间";
         _header = new GuiLabel
@@ -357,6 +360,13 @@ internal sealed class LiveRoomWindow : Window
                 return;
             }
 
+            if (key == Key.Esc)
+            {
+                ConfirmCloseLiveRoom();
+                key.Handled = true;
+                return;
+            }
+
             if (key == Key.CursorUp || key == Key.CursorDown)
             {
                 NavigateDanmakuHistory(key == Key.CursorUp ? -1 : 1);
@@ -412,6 +422,11 @@ internal sealed class LiveRoomWindow : Window
                 HideExpandedSuperChat();
                 key.Handled = true;
             }
+            else if (key == Key.Esc)
+            {
+                ConfirmCloseLiveRoom();
+                key.Handled = true;
+            }
             else if (key == Key.R || key == Key.R.WithShift)
             {
                 _ = RunUiTask(
@@ -443,6 +458,29 @@ internal sealed class LiveRoomWindow : Window
                 key.Handled = true;
             }
         };
+    }
+
+    private void ConfirmCloseLiveRoom()
+    {
+        var choice = Terminal.Gui.Views.MessageBox.Query(
+            _app,
+            "关闭直播间",
+            "确定要关闭当前直播间吗？",
+            ["关闭", "取消"]);
+        if (choice != 0)
+        {
+            return;
+        }
+
+        CloseLiveRoom();
+    }
+
+    private void CloseLiveRoom()
+    {
+        _ = RunUiTask(
+            () => _session.StopAsync(),
+            AddMessage,
+            () => _app.Invoke(_closeLiveRoom));
     }
 
     private async Task LoginAsync()

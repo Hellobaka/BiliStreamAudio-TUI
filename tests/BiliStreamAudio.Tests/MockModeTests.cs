@@ -40,6 +40,25 @@ public sealed class MockModeTests
     }
 
     [Fact]
+    public async Task Stopping_a_room_session_stops_playback_and_clears_the_room()
+    {
+        var audio = new MockAudioPlayer();
+        var danmaku = new MockDanmakuConnection();
+
+        await using var session = new RoomSession(
+            new MockRoomResolver(),
+            new MockStreamResolver(),
+            audio,
+            danmaku);
+
+        await session.SwitchAsync(1000, CancellationToken.None);
+        await session.StopAsync();
+
+        Assert.Equal(PlaybackState.Stopped, audio.State);
+        Assert.Null(session.Room);
+    }
+
+    [Fact]
     public async Task Mock_danmaku_is_generated_only_while_connected()
     {
         await using var connection = new MockDanmakuConnection(

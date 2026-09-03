@@ -76,6 +76,13 @@ public sealed class RoomSession : IAsyncDisposable
         }
     }
 
+    public async Task StopAsync()
+    {
+        await StopCurrentAsync().ConfigureAwait(false);
+        Room = null;
+        StatusChanged?.Invoke(this, "已停止");
+    }
+
     private async Task StopCurrentAsync()
     {
         _sessionLifetime?.Cancel();

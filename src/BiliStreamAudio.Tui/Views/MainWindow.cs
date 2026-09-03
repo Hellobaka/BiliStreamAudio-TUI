@@ -54,7 +54,8 @@ internal sealed class MainWindow : Window
             history,
             mockMode,
             liveRoomDisplayOptions,
-            RefreshStatusBar);
+            RefreshStatusBar,
+            CloseLiveRoom);
         _tabs = new Tabs
         {
             X = 0,
@@ -105,11 +106,13 @@ internal sealed class MainWindow : Window
 
     private void ShowLiveRoom() => _tabs.Value = LiveRoom;
 
+    private void CloseLiveRoom() => _tabs.Value = Browse;
+
     private void RefreshStatusBar()
     {
         var muteStatus = _audio.IsMuted ? " (静音)" : string.Empty;
         var mockStatus = _mockMode ? " · 模拟模式" : string.Empty;
-        _statusBar.Text = $"音量 {_audio.Volume}{muteStatus} · {_audio.State.ToDisplayText()}{mockStatus} · r 刷新 · m 静音 · +/- 音量 · l 登录 · Q/E 切换标签 · Ctrl+Q 退出";
+        _statusBar.Text = $"音量 {_audio.Volume}{muteStatus} · {_audio.State.ToDisplayText()}{mockStatus} · Esc 关闭直播间 · r 刷新 · m 静音 · +/- 音量 · l 登录 · Q/E 切换标签 · Ctrl+Q 退出";
         _statusBar.SetNeedsDraw();
     }
 
