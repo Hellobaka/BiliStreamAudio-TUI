@@ -64,7 +64,7 @@ internal sealed class MainWindow : Window
         };
         Browse = new BrowseWindow(app, directory, rooms, session, ShowLiveRoom);
         var playbackHistory = new PlaybackHistoryWindow(app, history, rooms, session, ShowLiveRoom);
-        var settings = new SettingsWindow(liveRoomDisplayOptions, LiveRoom.RefreshDanmakuRendering);
+        var settings = new SettingsWindow(liveRoomDisplayOptions, LiveRoom.RefreshDisplay);
         _tabs.Add(
             LiveRoom,
             Browse,

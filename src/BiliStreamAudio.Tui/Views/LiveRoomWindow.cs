@@ -54,6 +54,7 @@ internal sealed class LiveRoomWindow : Window
     private readonly TextField _input;
     private readonly GuiLabel _inputStatus;
     private readonly ObservableCollection<DanmakuListItem> _messageItems = [];
+    private readonly DanmakuListDataSource _messageDataSource;
     private readonly List<PendingDanmaku> _pendingDanmaku = [];
     private readonly List<ActiveSuperChat> _activeSuperChats = [];
     private readonly HashSet<string> _seenSuperChatIds = new(StringComparer.Ordinal);
@@ -177,7 +178,11 @@ internal sealed class LiveRoomWindow : Window
             Height = Dim.Fill(3),
             ViewportSettings = ViewportSettingsFlags.HasVerticalScrollBar
         };
-        _messages.Source = new DanmakuListDataSource(_messageItems, () => _displayOptions.ShowFanMedals);
+        _messageDataSource = new DanmakuListDataSource(
+            _messageItems,
+            () => _displayOptions.ShowFanMedals,
+            ShouldDisplayMessage);
+        _messages.Source = _messageDataSource;
         _input = new TextField
         {
             Text = "",
@@ -210,7 +215,12 @@ internal sealed class LiveRoomWindow : Window
 
     public void FocusInput() => _input.SetFocus();
 
-    public void RefreshDanmakuRendering() => _messages.SetNeedsDraw();
+    public void RefreshDisplay()
+    {
+        _messageDataSource.Refresh();
+        RenderSuperChatCapsules();
+        _messages.SetNeedsDraw();
+    }
 
     private void OnRoomChanged(LiveRoom room)
     {
@@ -304,7 +314,8 @@ internal sealed class LiveRoomWindow : Window
             {
                 AddMessageItem(
                     FormatDanmaku(item.ReceivedAt, item.UserName, item.Message),
-                    danmaku: item);
+                    danmaku: item,
+                    isDanmaku: true);
             }
         });
         danmaku.StatusChanged += (_, status) => _app.Invoke(() =>
@@ -387,9 +398,7 @@ internal sealed class LiveRoomWindow : Window
         _messages.Accepted += (_, _) =>
         {
             if (_messages.SelectedItem is { } index
-                && index >= 0
-                && index < _messageItems.Count
-                && _messageItems[index].SuperChat is { } superChat)
+                && _messageDataSource.GetItem(index)?.SuperChat is { } superChat)
             {
                 ShowExpandedSuperChat(superChat);
             }
@@ -568,7 +577,12 @@ internal sealed class LiveRoomWindow : Window
             _auth.Current?.UserName ?? "我",
             DateTimeOffset.Now);
         _pendingDanmaku.Add(pending);
-        UpdateMessageItem(pending.Id, $"{FormatDanmaku(pending.SentAt, pending.UserName, text)} 发送中 {SendingFrames[0]}", addIfMissing: true);
+        UpdateMessageItem(
+            pending.Id,
+            $"{FormatDanmaku(pending.SentAt, pending.UserName, text)} 发送中 {SendingFrames[0]}",
+            addIfMissing: true,
+            isDanmaku: true,
+            danmakuMessage: text);
         pending.AnimationToken = _app.AddTimeout(TimeSpan.FromMilliseconds(100), () =>
         {
             pending.FrameIndex = (pending.FrameIndex + 1) % SendingFrames.Length;
@@ -1023,6 +1037,16 @@ internal sealed class LiveRoomWindow : Window
             item.Capsule = null;
         }
 
+        if (!_displayOptions.ShowSuperChats)
+        {
+            _firstVisibleSuperChat = 0;
+            _lastVisibleSuperChat = -1;
+            _scrollSuperChatsLeft.Enabled = false;
+            _scrollSuperChatsRight.Enabled = false;
+            _superChatCapsules.SetNeedsDraw();
+            return;
+        }
+
         ClampSuperChatViewport();
         var availableWidth = GetCapsuleHostWidth();
         var x = 0;
@@ -1070,8 +1094,8 @@ internal sealed class LiveRoomWindow : Window
 
     private void UpdateSuperChatLayout()
     {
-        var hasActiveSuperChats = _activeSuperChats.Count > 0;
-        var hasExpandedSuperChat = _expandedSuperChat is not null;
+        var hasActiveSuperChats = _displayOptions.ShowSuperChats && _activeSuperChats.Count > 0;
+        var hasExpandedSuperChat = _displayOptions.ShowSuperChats && _expandedSuperChat is not null;
         var expandedCardHeight = hasExpandedSuperChat ? _expandedSuperChatCard.CardHeight : 0;
         var superChatTrayHeight = 2 + expandedCardHeight;
         _superChatTray.Visible = hasActiveSuperChats;
@@ -1150,15 +1174,26 @@ internal sealed class LiveRoomWindow : Window
     private void AddMessageItem(
         string text,
         bool isGift = false,
-        DanmakuEvent? danmaku = null) =>
-        UpdateMessageItem(Guid.NewGuid(), text, isGift, addIfMissing: true, danmaku: danmaku);
+        DanmakuEvent? danmaku = null,
+        bool isDanmaku = false,
+        string? danmakuMessage = null) =>
+        UpdateMessageItem(
+            Guid.NewGuid(),
+            text,
+            isGift,
+            addIfMissing: true,
+            danmaku: danmaku,
+            isDanmaku: isDanmaku,
+            danmakuMessage: danmakuMessage);
 
     private void UpdateMessageItem(
         Guid id,
         string text,
         bool isGift = false,
         bool addIfMissing = false,
-        DanmakuEvent? danmaku = null)
+        DanmakuEvent? danmaku = null,
+        bool? isDanmaku = null,
+        string? danmakuMessage = null)
     {
         for (var index = 0; index < _messageItems.Count; index++)
         {
@@ -1174,7 +1209,9 @@ internal sealed class LiveRoomWindow : Window
                 existing.SuperChat,
                 existing.SuperChatTier,
                 existing.IsGift,
-                danmaku ?? existing.Danmaku);
+                danmaku ?? existing.Danmaku,
+                isDanmaku ?? existing.IsDanmaku,
+                danmakuMessage ?? existing.DanmakuMessage);
             _messages.SetNeedsDraw();
             return;
         }
@@ -1184,7 +1221,13 @@ internal sealed class LiveRoomWindow : Window
             return;
         }
 
-        _messageItems.Add(new DanmakuListItem(id, text, danmaku: danmaku, isGift: isGift));
+        _messageItems.Add(new DanmakuListItem(
+            id,
+            text,
+            danmaku: danmaku,
+            isGift: isGift,
+            isDanmaku: isDanmaku ?? false,
+            danmakuMessage: danmakuMessage));
         while (_messageItems.Count > MaximumMessageCount)
         {
             _messageItems.RemoveAt(0);
@@ -1195,6 +1238,21 @@ internal sealed class LiveRoomWindow : Window
 
     private static string FormatDanmaku(DateTimeOffset receivedAt, string userName, string message) =>
         $"[{receivedAt:HH:mm:ss}] {userName}: {message}";
+
+    private bool ShouldDisplayMessage(DanmakuListItem item)
+    {
+        if (item.SuperChat is not null)
+        {
+            return _displayOptions.ShowSuperChats;
+        }
+
+        if (item.IsGift)
+        {
+            return _displayOptions.ShowGifts;
+        }
+
+        return !item.IsDanmaku || _displayOptions.IsDanmakuVisible(item.DanmakuMessage);
+    }
 
     internal static string FormatGiftMessage(GiftEvent gift, bool showAmount = false)
     {
@@ -1217,31 +1275,30 @@ internal sealed class LiveRoomWindow : Window
     {
         private readonly ObservableCollection<DanmakuListItem> _items;
         private readonly Func<bool> _showFanMedals;
+        private readonly Func<DanmakuListItem, bool> _shouldDisplay;
         private readonly NotifyCollectionChangedEventHandler _itemsChanged;
+        private List<DanmakuListItem> _visibleItems;
 
         public DanmakuListDataSource(
             ObservableCollection<DanmakuListItem> items,
-            Func<bool> showFanMedals)
+            Func<bool> showFanMedals,
+            Func<DanmakuListItem, bool> shouldDisplay)
         {
             _items = items;
             _showFanMedals = showFanMedals;
-            _itemsChanged = (_, args) =>
-            {
-                if (!SuspendCollectionChangedEvent)
-                {
-                    CollectionChanged?.Invoke(this, args);
-                }
-            };
+            _shouldDisplay = shouldDisplay;
+            _visibleItems = _items.Where(_shouldDisplay).ToList();
+            _itemsChanged = (_, _) => Refresh();
             _items.CollectionChanged += _itemsChanged;
         }
 
         public event NotifyCollectionChangedEventHandler? CollectionChanged;
 
-        public int Count => _items.Count;
+        public int Count => _visibleItems.Count;
 
-        public int MaxItemLength => _items.Count == 0
+        public int MaxItemLength => _visibleItems.Count == 0
             ? 0
-            : _items.Max(item => item.ToString().GetColumns());
+            : _visibleItems.Max(item => item.ToString().GetColumns());
 
         public bool SuspendCollectionChangedEvent { get; set; }
 
@@ -1251,7 +1308,22 @@ internal sealed class LiveRoomWindow : Window
         {
         }
 
-        public System.Collections.IList ToList() => _items;
+        public System.Collections.IList ToList() => _visibleItems;
+
+        public DanmakuListItem? GetItem(int index) => index >= 0 && index < _visibleItems.Count
+            ? _visibleItems[index]
+            : null;
+
+        public void Refresh()
+        {
+            _visibleItems = _items.Where(_shouldDisplay).ToList();
+            if (!SuspendCollectionChangedEvent)
+            {
+                CollectionChanged?.Invoke(
+                    this,
+                    new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+            }
+        }
 
         public void Dispose() => _items.CollectionChanged -= _itemsChanged;
 
@@ -1271,7 +1343,7 @@ internal sealed class LiveRoomWindow : Window
             int width,
             int viewportX)
         {
-            var message = _items[item];
+            var message = _visibleItems[item];
             var rowAttribute = GetRowAttribute(listView, message, selected);
             if (!_showFanMedals()
                 || message.Danmaku?.Medal is not { } medal)
@@ -1331,13 +1403,17 @@ internal sealed class LiveRoomWindow : Window
         SuperChatEvent? superChat = null,
         SuperChatTier? superChatTier = null,
         bool isGift = false,
-        DanmakuEvent? danmaku = null)
+        DanmakuEvent? danmaku = null,
+        bool isDanmaku = false,
+        string? danmakuMessage = null)
     {
         public Guid Id { get; } = id;
         public SuperChatEvent? SuperChat { get; } = superChat;
         public SuperChatTier? SuperChatTier { get; } = superChatTier;
         public bool IsGift { get; } = isGift;
         public DanmakuEvent? Danmaku { get; } = danmaku;
+        public bool IsDanmaku { get; } = isDanmaku;
+        public string DanmakuMessage { get; } = danmakuMessage ?? danmaku?.Message ?? string.Empty;
 
         public override string ToString() => text;
     }
