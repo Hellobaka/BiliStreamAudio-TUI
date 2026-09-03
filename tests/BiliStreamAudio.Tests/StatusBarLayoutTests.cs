@@ -121,7 +121,7 @@ public sealed class StatusBarLayoutTests : IDisposable
         Assert.Equal("时长 12:34", StatusBarFormatter.Format(StatusBarElement.WatchingDuration, content));
         Assert.Equal("礼物 6 · ¥88.5", StatusBarFormatter.Format(StatusBarElement.GiftStatistics, content));
         Assert.Equal("示例主播", StatusBarFormatter.Format(StatusBarElement.AnchorName, content));
-        Assert.Equal("12345", StatusBarFormatter.Format(StatusBarElement.RoomId, content));
+        Assert.Equal("房间 12345", StatusBarFormatter.Format(StatusBarElement.RoomId, content));
     }
 
     [Fact]
