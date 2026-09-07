@@ -206,7 +206,7 @@ internal sealed class MockAudioPlayer : IAudioPlayer, IAudioSpectrumSource
         _spectrumEnabled = enabled;
         _spectrumTimer.Change(
             enabled && _state == PlaybackState.Playing ? TimeSpan.Zero : Timeout.InfiniteTimeSpan,
-            enabled && _state == PlaybackState.Playing ? TimeSpan.FromMilliseconds(80) : Timeout.InfiniteTimeSpan);
+            enabled && _state == PlaybackState.Playing ? TimeSpan.FromMilliseconds(200) : Timeout.InfiniteTimeSpan);
     }
 
     public void Dispose()
@@ -225,7 +225,7 @@ internal sealed class MockAudioPlayer : IAudioPlayer, IAudioSpectrumSource
         StateChanged?.Invoke(this, state);
         if (state == PlaybackState.Playing && _spectrumEnabled)
         {
-            _spectrumTimer.Change(TimeSpan.Zero, TimeSpan.FromMilliseconds(80));
+            _spectrumTimer.Change(TimeSpan.Zero, TimeSpan.FromMilliseconds(200));
         }
         else
         {

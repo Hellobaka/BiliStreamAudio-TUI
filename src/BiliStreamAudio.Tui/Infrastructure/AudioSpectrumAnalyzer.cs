@@ -12,9 +12,13 @@ internal sealed class AudioSpectrumAnalyzer : IAudioSpectrumSource, IDisposable
     private const int SampleRate = 48_000;
     private const int WindowSize = 2_048;
     private const int OutputBandCount = 64;
-    private const int UpdateIntervalMilliseconds = 80;
+    // TUI 的可读性不会从超过 5 FPS 的刷新中受益，但终端重绘成本很高。
+    private const int UpdateIntervalMilliseconds = 200;
     private const double MinimumFrequency = 40;
     private const double MaximumFrequency = 16_000;
+
+    private static readonly float[] HannWindow = CreateHannWindow();
+    private static readonly FrequencyBinRange[] FrequencyBinRanges = CreateFrequencyBinRanges();
 
     private readonly object _sync = new();
     private readonly float[] _samples = new float[WindowSize];
@@ -108,7 +112,10 @@ internal sealed class AudioSpectrumAnalyzer : IAudioSpectrumSource, IDisposable
                 var left = (short)(data[offset] | data[offset + 1] << 8);
                 var right = (short)(data[offset + 2] | data[offset + 3] << 8);
                 _samples[_writeIndex] = (left + right) / (2f * short.MaxValue);
-                _writeIndex = (_writeIndex + 1) % WindowSize;
+                if (++_writeIndex == WindowSize)
+                {
+                    _writeIndex = 0;
+                }
                 _sampleCount = Math.Min(_sampleCount + 1, WindowSize);
             }
         }
@@ -133,7 +140,7 @@ internal sealed class AudioSpectrumAnalyzer : IAudioSpectrumSource, IDisposable
 
     private void CalculateSpectrum()
     {
-        var previousMagnitudes = new float[OutputBandCount];
+        Span<float> previousMagnitudes = stackalloc float[OutputBandCount];
         lock (_sync)
         {
             if (!_started || !_enabled || _sampleCount < WindowSize)
@@ -144,23 +151,19 @@ internal sealed class AudioSpectrumAnalyzer : IAudioSpectrumSource, IDisposable
             for (var index = 0; index < WindowSize; index++)
             {
                 var sample = _samples[(_writeIndex + index) % WindowSize];
-                var hann = 0.5 - 0.5 * Math.Cos(2 * Math.PI * index / (WindowSize - 1));
-                _fftBuffer[index] = new Complex(sample * hann, 0);
+                _fftBuffer[index] = new Complex(sample * HannWindow[index], 0);
             }
 
-            Array.Copy(_previousMagnitudes, previousMagnitudes, OutputBandCount);
+            _previousMagnitudes.AsSpan().CopyTo(previousMagnitudes);
         }
 
         Transform(_fftBuffer);
         var magnitudes = new float[OutputBandCount];
         for (var band = 0; band < OutputBandCount; band++)
         {
-            var lowerFrequency = BandFrequency(band);
-            var upperFrequency = BandFrequency(band + 1);
-            var firstBin = Math.Max(1, (int)Math.Floor(lowerFrequency * WindowSize / SampleRate));
-            var lastBin = Math.Min(WindowSize / 2 - 1, (int)Math.Ceiling(upperFrequency * WindowSize / SampleRate));
+            var binRange = FrequencyBinRanges[band];
             var peak = 0d;
-            for (var bin = firstBin; bin <= lastBin; bin++)
+            for (var bin = binRange.First; bin <= binRange.Last; bin++)
             {
                 peak = Math.Max(peak, _fftBuffer[bin].Magnitude * 2 / WindowSize);
             }
@@ -185,9 +188,37 @@ internal sealed class AudioSpectrumAnalyzer : IAudioSpectrumSource, IDisposable
         SpectrumChanged?.Invoke(this, spectrum);
     }
 
+    private static float[] CreateHannWindow()
+    {
+        var window = new float[WindowSize];
+        for (var index = 0; index < window.Length; index++)
+        {
+            window[index] = (float)(0.5 - 0.5 * Math.Cos(2 * Math.PI * index / (WindowSize - 1)));
+        }
+
+        return window;
+    }
+
+    private static FrequencyBinRange[] CreateFrequencyBinRanges()
+    {
+        var ranges = new FrequencyBinRange[OutputBandCount];
+        for (var band = 0; band < ranges.Length; band++)
+        {
+            var lowerFrequency = BandFrequency(band);
+            var upperFrequency = BandFrequency(band + 1);
+            ranges[band] = new FrequencyBinRange(
+                Math.Max(1, (int)Math.Floor(lowerFrequency * WindowSize / SampleRate)),
+                Math.Min(WindowSize / 2 - 1, (int)Math.Ceiling(upperFrequency * WindowSize / SampleRate)));
+        }
+
+        return ranges;
+    }
+
     private static double BandFrequency(int band) => MinimumFrequency * Math.Pow(
         MaximumFrequency / MinimumFrequency,
         band / (double)OutputBandCount);
+
+    private readonly record struct FrequencyBinRange(int First, int Last);
 
     private static void Transform(Complex[] values)
     {

@@ -9,6 +9,9 @@ namespace BiliStreamAudio.Tui.Views;
 
 internal sealed class MainWindow : ApplicationWindow
 {
+    private static readonly TimeSpan SpectrumPresentationInterval = TimeSpan.FromMilliseconds(200);
+
+    private readonly IApplication _app;
     private readonly Tabs _tabs;
     private readonly GuiView _statusBarContainer;
     private readonly SpectrumStatusBarView[] _statusBars;
@@ -19,7 +22,10 @@ internal sealed class MainWindow : ApplicationWindow
     private readonly LiveRoomDisplayOptions _displayOptions;
     private readonly IAudioSpectrumSource? _spectrumSource;
     private readonly EventHandler<SpectrumFrame> _spectrumChangedHandler;
+    private SpectrumFrame? _pendingSpectrum;
+    private int _hasPendingSpectrum;
     private bool _isSpectrumSubscribed;
+    private bool _isSpectrumPresentationScheduled;
 
     public MainWindow(
         IApplication app,
@@ -36,6 +42,7 @@ internal sealed class MainWindow : ApplicationWindow
         LiveRoomDisplayOptions liveRoomDisplayOptions,
         ISettingsStore settingsStore)
     {
+        _app = app;
         Title = mockMode ? "BiliStreamAudio-TUI（模拟模式）" : "BiliStreamAudio-TUI";
         X = 0;
         Y = 0;
@@ -47,7 +54,7 @@ internal sealed class MainWindow : ApplicationWindow
         _mockMode = mockMode;
         _displayOptions = liveRoomDisplayOptions;
         _spectrumSource = audio as IAudioSpectrumSource;
-        _spectrumChangedHandler = (_, spectrum) => app.Invoke(() => SetSpectrum(spectrum));
+        _spectrumChangedHandler = (_, spectrum) => QueueSpectrum(spectrum);
 
         _statusBarContainer = new GuiView
         {
@@ -155,7 +162,6 @@ internal sealed class MainWindow : ApplicationWindow
             settings.StatusBarSecondRow,
             settings.StatusBarLayoutVersion is null);
         var rows = new[] { layout.FirstRow, layout.SecondRow }.Where(row => row.Count > 0).ToArray();
-        UpdateSpectrumSubscription(layout);
         _statusBarContainer.Visible = rows.Length > 0;
         _statusBarContainer.Height = rows.Length;
         _statusBarContainer.Y = Pos.AnchorEnd(rows.Length);
@@ -186,6 +192,7 @@ internal sealed class MainWindow : ApplicationWindow
             statusBar.SetColorMode(_displayOptions.SpectrumColorMode);
         }
 
+        UpdateSpectrumSubscription(layout);
         SetNeedsDraw();
     }
 
@@ -206,24 +213,64 @@ internal sealed class MainWindow : ApplicationWindow
 
         if (shouldRenderSpectrum)
         {
+            ClearPendingSpectrum();
             _spectrumSource.SpectrumChanged += _spectrumChangedHandler;
             _isSpectrumSubscribed = true;
             SetSpectrum(_spectrumSource.CurrentSpectrum);
+            ScheduleSpectrumPresentation();
         }
         else
         {
             _spectrumSource.SpectrumChanged -= _spectrumChangedHandler;
             _isSpectrumSubscribed = false;
+            ClearPendingSpectrum();
             SetSpectrum(null);
         }
     }
 
     private void SetSpectrum(SpectrumFrame? spectrum)
     {
-        foreach (var statusBar in _statusBars)
+        foreach (var statusBar in _statusBars.Where(statusBar => statusBar.DisplaysSpectrum))
         {
             statusBar.SetSpectrum(spectrum);
         }
+    }
+
+    private void QueueSpectrum(SpectrumFrame spectrum)
+    {
+        Interlocked.Exchange(ref _pendingSpectrum, spectrum);
+        Interlocked.Exchange(ref _hasPendingSpectrum, 1);
+    }
+
+    private void ScheduleSpectrumPresentation()
+    {
+        if (_isSpectrumPresentationScheduled)
+        {
+            return;
+        }
+
+        _isSpectrumPresentationScheduled = true;
+        _app.AddTimeout(SpectrumPresentationInterval, () =>
+        {
+            if (!_isSpectrumSubscribed)
+            {
+                _isSpectrumPresentationScheduled = false;
+                return false;
+            }
+
+            if (Interlocked.Exchange(ref _hasPendingSpectrum, 0) != 0)
+            {
+                SetSpectrum(Interlocked.Exchange(ref _pendingSpectrum, null));
+            }
+
+            return true;
+        });
+    }
+
+    private void ClearPendingSpectrum()
+    {
+        Interlocked.Exchange(ref _pendingSpectrum, null);
+        Interlocked.Exchange(ref _hasPendingSpectrum, 0);
     }
 
     private void SetStatusBarEditing(bool editing)

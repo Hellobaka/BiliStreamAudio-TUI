@@ -16,38 +16,71 @@ internal sealed class SpectrumStatusBarView : GuiView
     private IReadOnlyList<StatusBarElement> _elements = [];
     private StatusBarContent _content = StatusBarContent.Preview;
     private IReadOnlyList<float> _magnitudes = [];
+    private string _spectrumSignature = string.Empty;
     private int _bandCount = 8;
     private SpectrumColorMode _colorMode = SpectrumColorMode.Rainbow;
 
     public void SetElements(IEnumerable<StatusBarElement> elements)
     {
-        _elements = elements.Distinct().ToArray();
+        var normalized = elements.Distinct().ToArray();
+        if (_elements.SequenceEqual(normalized))
+        {
+            return;
+        }
+
+        _elements = normalized;
         SetNeedsDraw();
     }
 
     public void SetContent(StatusBarContent content)
     {
+        if (_content == content)
+        {
+            return;
+        }
+
         _content = content;
         SetNeedsDraw();
     }
 
     public void SetSpectrum(SpectrumFrame? spectrum)
     {
-        _magnitudes = spectrum?.Magnitudes.ToArray() ?? [];
+        var magnitudes = spectrum?.Magnitudes ?? [];
+        var signature = CreateSpectrumSignature(magnitudes);
+        if (_spectrumSignature == signature)
+        {
+            return;
+        }
+
+        _spectrumSignature = signature;
+        _magnitudes = magnitudes.ToArray();
         SetNeedsDraw();
     }
 
     public void SetBandCount(int bandCount)
     {
-        _bandCount = Math.Clamp(bandCount, LiveRoomDisplayOptions.MinimumSpectrumBandCount, LiveRoomDisplayOptions.MaximumSpectrumBandCount);
+        var normalized = Math.Clamp(bandCount, LiveRoomDisplayOptions.MinimumSpectrumBandCount, LiveRoomDisplayOptions.MaximumSpectrumBandCount);
+        if (_bandCount == normalized)
+        {
+            return;
+        }
+
+        _bandCount = normalized;
         SetNeedsDraw();
     }
 
     public void SetColorMode(SpectrumColorMode colorMode)
     {
+        if (_colorMode == colorMode)
+        {
+            return;
+        }
+
         _colorMode = colorMode;
         SetNeedsDraw();
     }
+
+    public bool DisplaysSpectrum => _elements.Contains(StatusBarElement.Spectrum);
 
     protected override bool OnDrawingContent(DrawContext? context)
     {
@@ -146,5 +179,21 @@ internal sealed class SpectrumStatusBarView : GuiView
         }
 
         return result.Append(ellipsis).ToString();
+    }
+
+    private static string CreateSpectrumSignature(IReadOnlyList<float> magnitudes)
+    {
+        if (magnitudes.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var levels = new char[magnitudes.Count];
+        for (var index = 0; index < magnitudes.Count; index++)
+        {
+            levels[index] = (char)Math.Clamp((int)(Math.Clamp(magnitudes[index], 0f, 1f) * 8), 0, 7);
+        }
+
+        return new string(levels);
     }
 }
