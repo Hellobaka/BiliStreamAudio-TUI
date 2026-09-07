@@ -110,13 +110,14 @@ public sealed class StreamResolver(BiliHttp http) : IStreamResolver
                 }
             }
         }
-        // 实测中码率（画质）对启动延迟的影响远大于协议/格式。因此优先选最低画质，
-        // 同画质下再按低延迟顺序（FLV → fMP4 → TS）选择。
+        // FFmpeg 支持的格式按低延迟顺序选择：FLV → HLS fMP4 → HLS TS。
+        // 每种格式内再优先选择较低画质，以降低启动耗时和带宽占用。
+        var compatible = result.Where(StreamProfile.IsFfmpegCompatible);
         return (onlyAudio
-                ? result.Where(stream => stream.IsAudioOnly)
-                : result)
-            .OrderBy(stream => stream.Quality)
-            .ThenBy(StreamProfile.GetLatencyRank)
+                ? compatible.Where(stream => stream.IsAudioOnly)
+                : compatible)
+            .OrderBy(StreamProfile.GetLatencyRank)
+            .ThenBy(stream => stream.Quality)
             .ThenBy(stream => StreamProfile.GetCodecRank(stream.Codec))
             .ToArray();
     }
@@ -124,6 +125,13 @@ public sealed class StreamResolver(BiliHttp http) : IStreamResolver
 
 internal static class StreamProfile
 {
+    public static bool IsFfmpegCompatible(StreamDescriptor stream) =>
+        (stream.Protocol.Equals("http_stream", StringComparison.OrdinalIgnoreCase)
+            && stream.Format.Equals("flv", StringComparison.OrdinalIgnoreCase))
+        || (stream.Protocol.Equals("http_hls", StringComparison.OrdinalIgnoreCase)
+            && (stream.Format.Equals("fmp4", StringComparison.OrdinalIgnoreCase)
+                || stream.Format.Equals("ts", StringComparison.OrdinalIgnoreCase)));
+
     public static bool IsAudioOnly(bool requestedAudioOnly, string codec, Uri url)
     {
         if (!requestedAudioOnly || IsVideoCodec(codec))

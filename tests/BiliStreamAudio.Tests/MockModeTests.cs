@@ -64,15 +64,32 @@ public sealed class MockModeTests
     }
 
     [Fact]
-    public void Real_AudioPlayer_constructor_registers_callbacks_without_crash()
+    public void Real_AudioPlayer_constructor_configures_ffmpeg_playback_without_starting_it()
     {
-        // Smoke test: creating a real AudioPlayer must succeed.
-        // This exercises LibVLC initialization, SetAudioFormat, and SetAudioCallbacks
-        // to confirm that callback registration does not break the player init path.
         using var audio = new AudioPlayer();
         Assert.Equal(PlaybackState.Stopped, audio.State);
         Assert.Equal(70, audio.Volume);
         Assert.False(audio.IsMuted);
+    }
+
+    [Fact]
+    public async Task Real_AudioPlayer_reports_a_missing_ffmpeg_before_initializing_audio_output()
+    {
+        var missingPath = Path.Combine(Path.GetTempPath(), $"missing-ffmpeg-{Guid.NewGuid():N}.exe");
+        using var audio = new AudioPlayer(missingPath);
+
+        var exception = await Assert.ThrowsAsync<FileNotFoundException>(() => audio.PlayAsync(
+            new StreamDescriptor(
+                new Uri("https://example.test/live.m3u8"),
+                "http_hls",
+                "fmp4",
+                80,
+                true,
+                1000),
+            CancellationToken.None));
+
+        Assert.Equal(missingPath, exception.FileName);
+        Assert.Equal(PlaybackState.Error, audio.State);
     }
 
     [Fact]

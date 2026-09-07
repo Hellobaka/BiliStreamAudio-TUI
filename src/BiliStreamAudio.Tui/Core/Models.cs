@@ -213,10 +213,19 @@ public sealed record RefreshResult(bool Success, AuthSession? Session, string? E
     public static RefreshResult Failed(string message) => new(false, null, message);
 }
 
+public enum NetworkProxyMode
+{
+    Disabled,
+    AutoDetect,
+    Manual
+}
+
 public sealed class AppSettings
 {
     public int Id { get; set; } = 1;
     public int Volume { get; set; } = 70;
+    public NetworkProxyMode NetworkProxyMode { get; set; }
+    public string ManualProxyUrl { get; set; } = string.Empty;
     public bool ShowDanmaku { get; set; } = true;
     public bool ShowSuperChats { get; set; } = true;
     public bool ShowGifts { get; set; } = true;

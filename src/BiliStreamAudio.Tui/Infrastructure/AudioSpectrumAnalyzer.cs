@@ -5,7 +5,7 @@ namespace BiliStreamAudio.Tui.Infrastructure;
 
 /// <summary>
 /// 从固定格式的 PCM 音频计算显示用频谱。采样写入和 FFT 计算分属不同线程，
-/// 以免阻塞 LibVLC 的实时音频回调。
+/// 以免阻塞 FFmpeg 标准输出的实时读取。
 /// </summary>
 internal sealed class AudioSpectrumAnalyzer : IAudioSpectrumSource, IDisposable
 {

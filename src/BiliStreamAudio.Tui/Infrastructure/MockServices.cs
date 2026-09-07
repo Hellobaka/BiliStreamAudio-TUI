@@ -166,6 +166,7 @@ internal sealed class MockAudioPlayer : IAudioPlayer, IAudioSpectrumSource
     public PlaybackState State => _state;
     public int Volume => _volume;
     public bool IsMuted => _muted;
+    public NetworkProxyMode NetworkProxyMode { get; private set; }
     public SpectrumFrame? CurrentSpectrum
     {
         get
@@ -196,6 +197,9 @@ internal sealed class MockAudioPlayer : IAudioPlayer, IAudioSpectrumSource
     public void SetVolume(int volume) => _volume = Math.Clamp(volume, 0, 100);
 
     public void ToggleMute() => _muted = !_muted;
+
+    public void SetNetworkProxy(NetworkProxyMode mode, string? manualProxyUrl = null) =>
+        NetworkProxyMode = mode;
 
     public void SetSpectrumEnabled(bool enabled)
     {

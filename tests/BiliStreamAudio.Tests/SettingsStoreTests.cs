@@ -29,6 +29,8 @@ public sealed class SettingsStoreTests : IDisposable
         var settings = store.Load();
 
         Assert.Equal(70, settings.Volume);
+        Assert.Equal(NetworkProxyMode.Disabled, settings.NetworkProxyMode);
+        Assert.Empty(settings.ManualProxyUrl);
         Assert.True(settings.ShowDanmaku);
         Assert.True(settings.ShowSuperChats);
         Assert.True(settings.ShowGifts);
@@ -48,6 +50,8 @@ public sealed class SettingsStoreTests : IDisposable
         var original = new AppSettings
         {
             Volume = 35,
+            NetworkProxyMode = NetworkProxyMode.Manual,
+            ManualProxyUrl = "http://127.0.0.1:7890",
             ShowDanmaku = false,
             ShowSuperChats = false,
             ShowGifts = false,
@@ -63,6 +67,8 @@ public sealed class SettingsStoreTests : IDisposable
         var loaded = store.Load();
 
         Assert.Equal(35, loaded.Volume);
+        Assert.Equal(NetworkProxyMode.Manual, loaded.NetworkProxyMode);
+        Assert.Equal("http://127.0.0.1:7890", loaded.ManualProxyUrl);
         Assert.False(loaded.ShowDanmaku);
         Assert.False(loaded.ShowSuperChats);
         Assert.False(loaded.ShowGifts);

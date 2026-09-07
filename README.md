@@ -14,7 +14,7 @@ The project deliberately does not access paid, DRM, or restricted content and do
 
 ## Mock mode
 
-Use Mock mode to test the TUI without opening a login window, initializing LibVLC, or making any network request:
+Use Mock mode to test the TUI without opening a login window, starting FFmpeg, or making any network request:
 
 ```powershell
 dotnet run --project src/BiliStreamAudio.Tui -- --mock

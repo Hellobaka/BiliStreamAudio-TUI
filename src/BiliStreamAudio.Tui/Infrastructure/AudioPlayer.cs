@@ -1,11 +1,10 @@
 using BiliStreamAudio.Tui.Core;
-using LibVLCSharp.Shared;
 using NAudio.CoreAudioApi;
 using Serilog;
-using System.Buffers;
-using System.Runtime.InteropServices;
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 using BufferedWaveProvider = NAudio.Wave.BufferedWaveProvider;
+using VolumeWaveProvider16 = NAudio.Wave.VolumeWaveProvider16;
 using WasapiOut = NAudio.Wave.WasapiOut;
 using WaveFormat = NAudio.Wave.WaveFormat;
 
@@ -13,58 +12,42 @@ namespace BiliStreamAudio.Tui.Infrastructure;
 
 public sealed class AudioPlayer : IAudioPlayer, IAudioSpectrumSource
 {
-    private const string LiveReferrer = "https://live.bilibili.com/";
     private const int SampleRate = 48_000;
     private const int Channels = 2;
     private const int BitsPerSample = 16;
 
-    private readonly LibVLC _vlc;
-    private readonly MediaPlayer _player;
+    private readonly object _sync = new();
+    private readonly SemaphoreSlim _lifecycle = new(1, 1);
+    private readonly string _ffmpegPath;
     private readonly BufferedWaveProvider _audioBuffer = new(new WaveFormat(SampleRate, BitsPerSample, Channels))
     {
         BufferDuration = TimeSpan.FromMilliseconds(500),
         DiscardOnBufferOverflow = true,
         ReadFully = true
     };
+    private readonly VolumeWaveProvider16 _volumeProvider;
     private readonly AudioSpectrumAnalyzer _spectrumAnalyzer = new();
-    private readonly PlaybackReadiness _readiness = new();
+    private PlaybackProcessSession? _session;
     private PlaybackState _state = PlaybackState.Stopped;
     private int _volume = 70;
     private bool _muted;
-    private DateTimeOffset? _fetchStartedAt;
-    private bool _bufferingLogged;
-    private bool _clockStartedLogged;
-    private bool _playingLogged;
+    private NetworkProxyMode _networkProxyMode;
+    private string _manualProxyUrl = string.Empty;
+    private bool _disposed;
     private WasapiOut? _audioOutput;
 
     public AudioPlayer()
+        : this(Path.Combine(AppContext.BaseDirectory, FfmpegProcess.ExecutableName))
     {
-        LibVLCSharp.Shared.Core.Initialize();
-        _vlc = new LibVLC(
-            "--no-video",
-            "--intf=dummy",
-            "--no-osd",
-            "--quiet",
-            "--verbose=2",
-            $"--http-user-agent={BiliHttp.DesktopBrowserUserAgent}",
-            $"--http-referrer={LiveReferrer}",
-            "--http-forward-cookies");
-        _vlc.SetUserAgent("BiliStreamAudio-TUI", BiliHttp.DesktopBrowserUserAgent);
-        _vlc.Log += OnVlcLog;
-        _player = new MediaPlayer(_vlc) { Volume = _volume };
-        _player.Playing += OnPlaying;
-        _player.Buffering += OnBuffering;
-        _player.ESSelected += OnElementaryStreamSelected;
-        _player.TimeChanged += OnTimeChanged;
-        _player.EncounteredError += (_, _) => SetState(PlaybackState.Error);
-        _player.Stopped += (_, _) => SetState(PlaybackState.Stopped);
-        _player.SetAudioFormat("S16N", SampleRate, Channels);
-        _player.SetAudioCallbacks(
-            (data, samples, count, pts) => OnAudioPlay(samples, count),
-            (data, pts) => _audioOutput?.Pause(),
-            (data, pts) => _audioOutput?.Play(),
-            (data, pts) => _audioBuffer.ClearBuffer(),
-            data => { });
+    }
+
+    internal AudioPlayer(string ffmpegPath)
+    {
+        _ffmpegPath = ffmpegPath;
+        _volumeProvider = new VolumeWaveProvider16(_audioBuffer)
+        {
+            Volume = _volume / 100f
+        };
     }
 
     public event EventHandler<PlaybackState>? StateChanged;
@@ -77,70 +60,295 @@ public sealed class AudioPlayer : IAudioPlayer, IAudioSpectrumSource
     public PlaybackState State => _state;
     public int Volume => _volume;
     public bool IsMuted => _muted;
+    public NetworkProxyMode NetworkProxyMode
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _networkProxyMode;
+            }
+        }
+    }
     public SpectrumFrame? CurrentSpectrum => _spectrumAnalyzer.CurrentSpectrum;
 
     public void SetSpectrumEnabled(bool enabled) => _spectrumAnalyzer.SetEnabled(enabled);
 
-    public Task PlayAsync(StreamDescriptor stream, CancellationToken cancellationToken)
+    public async Task PlayAsync(StreamDescriptor stream, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        _readiness.Reset();
-        _fetchStartedAt = DateTimeOffset.Now;
-        _bufferingLogged = false;
-        _clockStartedLogged = false;
-        _playingLogged = false;
-        Log.Information(
-            "拉取直播流：房间 {RoomId}，{Protocol}/{Format}，编码 {Codec}，画质 {Quality}，预期码率 {Bitrate}",
-            stream.RoomId,
-            stream.Protocol,
-            stream.Format,
-            stream.Codec,
-            stream.Quality,
-            stream.BitrateKbps is { } bitrate ? $"{bitrate} kbps" : "未知");
-        using var media = new Media(_vlc, stream.Url);
-        foreach (var option in VlcRequestOptions.Create(stream))
+        await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            media.AddOption(option);
-        }
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            await StopCoreAsync().ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
 
-        _audioBuffer.ClearBuffer();
-        _spectrumAnalyzer.Start();
-        EnsureAudioOutput().Play();
-        if (!_player.Play(media))
+            if (!File.Exists(_ffmpegPath))
+            {
+                SetState(PlaybackState.Error);
+                throw new FileNotFoundException("找不到 FFmpeg 音频解码器。", _ffmpegPath);
+            }
+
+            Log.Information(
+                "拉取直播流：房间 {RoomId}，{Protocol}/{Format}，编码 {Codec}，画质 {Quality}，预期码率 {Bitrate}",
+                stream.RoomId,
+                stream.Protocol,
+                stream.Format,
+                stream.Codec,
+                stream.Quality,
+                stream.BitrateKbps is { } bitrate ? $"{bitrate} kbps" : "未知");
+
+            NetworkProxyMode proxyMode;
+            string manualProxyUrl;
+            lock (_sync)
+            {
+                proxyMode = _networkProxyMode;
+                manualProxyUrl = _manualProxyUrl;
+            }
+            var proxy = NetworkProxy.Resolve(stream.Url, proxyMode, manualProxyUrl);
+            if (proxy is not null)
+            {
+                Log.Information(
+                    "FFmpeg 播放使用 {ProxyMode} 网络代理 {ProxyHost}:{ProxyPort}",
+                    proxyMode == NetworkProxyMode.AutoDetect ? "自动检测" : "手动配置",
+                    proxy.Host,
+                    proxy.Port);
+            }
+
+            var process = new Process
+            {
+                StartInfo = FfmpegProcess.CreateStartInfo(
+                    _ffmpegPath,
+                    stream,
+                    proxy)
+            };
+            PlaybackProcessSession? session = null;
+            try
+            {
+                EnsureAudioOutput();
+                if (!process.Start())
+                {
+                    throw new InvalidOperationException("FFmpeg 音频解码器无法启动。");
+                }
+
+                session = new PlaybackProcessSession(process, cancellationToken);
+                lock (_sync)
+                {
+                    _session = session;
+                }
+
+                _audioBuffer.ClearBuffer();
+                _spectrumAnalyzer.Start();
+                _audioOutput!.Play();
+                SetState(PlaybackState.Buffering);
+                Log.Information("播放阶段：FFmpeg 已启动，等待首个 PCM 音频帧");
+                session.Completion = MonitorPlaybackAsync(session);
+            }
+            catch
+            {
+                session?.CancelAndKill();
+                if (session is not null)
+                {
+                    DetachCurrentSession(session);
+                }
+
+                session?.Dispose();
+                process.Dispose();
+                _audioOutput?.Stop();
+                _audioBuffer.ClearBuffer();
+                _spectrumAnalyzer.Stop();
+                SetState(PlaybackState.Error);
+                throw;
+            }
+        }
+        finally
         {
-            _audioOutput?.Stop();
-            _audioBuffer.ClearBuffer();
-            _spectrumAnalyzer.Stop();
-            throw new InvalidOperationException("音频播放器无法启动直播流。");
+            _lifecycle.Release();
         }
-
-        return Task.CompletedTask;
     }
 
-    public Task StopAsync()
+    public async Task StopAsync()
     {
-        _readiness.Reset();
-        _fetchStartedAt = null;
-        _bufferingLogged = false;
-        _clockStartedLogged = false;
-        _playingLogged = false;
-        _player.Stop();
-        _audioOutput?.Stop();
-        _audioBuffer.ClearBuffer();
-        _spectrumAnalyzer.Stop();
-        return Task.CompletedTask;
+        await _lifecycle.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await StopCoreAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycle.Release();
+        }
     }
 
     public void SetVolume(int volume)
     {
         _volume = Math.Clamp(volume, 0, 100);
-        _player.Volume = _muted ? 0 : _volume;
+        _volumeProvider.Volume = _muted ? 0 : _volume / 100f;
     }
 
     public void ToggleMute()
     {
         _muted = !_muted;
-        _player.Mute = _muted;
+        _volumeProvider.Volume = _muted ? 0 : _volume / 100f;
+    }
+
+    public void SetNetworkProxy(NetworkProxyMode mode, string? manualProxyUrl = null)
+    {
+        lock (_sync)
+        {
+            _networkProxyMode = Enum.IsDefined(mode) ? mode : NetworkProxyMode.Disabled;
+            _manualProxyUrl = manualProxyUrl?.Trim() ?? string.Empty;
+        }
+    }
+
+    private async Task StopCoreAsync()
+    {
+        PlaybackProcessSession? session;
+        lock (_sync)
+        {
+            session = _session;
+            _session = null;
+        }
+
+        if (session is not null)
+        {
+            session.CancelAndKill();
+            try
+            {
+                await session.Completion.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            finally
+            {
+                session.Dispose();
+            }
+        }
+
+        _audioOutput?.Stop();
+        _audioBuffer.ClearBuffer();
+        _spectrumAnalyzer.Stop();
+        SetState(PlaybackState.Stopped);
+    }
+
+    private async Task MonitorPlaybackAsync(PlaybackProcessSession session)
+    {
+        var startedAt = DateTimeOffset.Now;
+        try
+        {
+            var pcmTask = PumpPcmAsync(session, startedAt);
+            var logTask = PumpLogAsync(session);
+            await session.Process.WaitForExitAsync(session.Token).ConfigureAwait(false);
+            await Task.WhenAll(pcmTask, logTask).ConfigureAwait(false);
+
+            if (IsCurrentSession(session))
+            {
+                if (session.Process.ExitCode == 0)
+                {
+                    SetState(PlaybackState.Stopped);
+                }
+                else
+                {
+                    Log.Error(
+                        "FFmpeg 音频解码器异常退出，代码 {ExitCode}。最近输出：{Output}",
+                        session.Process.ExitCode,
+                        session.RecentLog);
+                    SetState(PlaybackState.Error);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (session.Token.IsCancellationRequested)
+        {
+            if (IsCurrentSession(session))
+            {
+                SetState(PlaybackState.Stopped);
+            }
+        }
+        catch (Exception exception)
+        {
+            Log.Error(exception, "读取 FFmpeg 音频输出失败");
+            if (IsCurrentSession(session))
+            {
+                SetState(PlaybackState.Error);
+            }
+        }
+        finally
+        {
+            var wasCurrent = DetachCurrentSession(session);
+            if (wasCurrent)
+            {
+                _audioOutput?.Stop();
+                _audioBuffer.ClearBuffer();
+                _spectrumAnalyzer.Stop();
+            }
+
+            session.Dispose();
+        }
+    }
+
+    private async Task PumpPcmAsync(PlaybackProcessSession session, DateTimeOffset startedAt)
+    {
+        var buffer = new byte[16 * 1024];
+        var receivedFirstFrame = false;
+        while (true)
+        {
+            var read = await session.Process.StandardOutput.BaseStream
+                .ReadAsync(buffer, session.Token)
+                .ConfigureAwait(false);
+            if (read == 0)
+            {
+                return;
+            }
+
+            if (!receivedFirstFrame)
+            {
+                receivedFirstFrame = true;
+                Log.Information(
+                    "播放阶段：收到首个 PCM 音频帧，距启动 FFmpeg {Elapsed:F1} 秒",
+                    (DateTimeOffset.Now - startedAt).TotalSeconds);
+                if (IsCurrentSession(session))
+                {
+                    SetState(PlaybackState.Playing);
+                }
+            }
+
+            _audioBuffer.AddSamples(buffer, 0, read);
+            _spectrumAnalyzer.PushPcm16Stereo(buffer, read);
+        }
+    }
+
+    private static async Task PumpLogAsync(PlaybackProcessSession session)
+    {
+        while (await session.Process.StandardError.ReadLineAsync(session.Token).ConfigureAwait(false) is { } line)
+        {
+            var sanitized = FfmpegLogSanitizer.Sanitize(line);
+            session.AddLog(sanitized);
+            Log.Warning("FFmpeg {Message}", sanitized);
+        }
+    }
+
+    private bool IsCurrentSession(PlaybackProcessSession session)
+    {
+        lock (_sync)
+        {
+            return ReferenceEquals(_session, session);
+        }
+    }
+
+    private bool DetachCurrentSession(PlaybackProcessSession session)
+    {
+        lock (_sync)
+        {
+            if (!ReferenceEquals(_session, session))
+            {
+                return false;
+            }
+
+            _session = null;
+            return true;
+        }
     }
 
     private void SetState(PlaybackState state)
@@ -154,180 +362,278 @@ public sealed class AudioPlayer : IAudioPlayer, IAudioSpectrumSource
         StateChanged?.Invoke(this, state);
     }
 
-    private void OnPlaying(object? sender, EventArgs args)
-    {
-        if (!_playingLogged)
-        {
-            _playingLogged = true;
-            LogPlaybackTiming("播放器开始播放", _fetchStartedAt);
-        }
-
-        if (_readiness.OnPlaying() is { } state)
-        {
-            SetState(state);
-        }
-    }
-
-    private void OnBuffering(object? sender, MediaPlayerBufferingEventArgs args)
-    {
-        if (!_bufferingLogged)
-        {
-            _bufferingLogged = true;
-            LogPlaybackTiming("开始缓冲", _fetchStartedAt);
-        }
-
-        SetState(_readiness.OnBuffering(args.Cache));
-    }
-
-    private void OnElementaryStreamSelected(object? sender, MediaPlayerESSelectedEventArgs args)
-    {
-        if (args.Type == TrackType.Audio && _readiness.OnAudioTrackSelected() is { } state)
-        {
-            SetState(state);
-        }
-    }
-
-    private void OnTimeChanged(object? sender, MediaPlayerTimeChangedEventArgs args)
-    {
-        if (args.Time >= 0 && !_clockStartedLogged)
-        {
-            _clockStartedLogged = true;
-            LogPlaybackTiming("播放时钟首次推进", _fetchStartedAt);
-        }
-
-        if (_readiness.OnTimeChanged(args.Time) is { } state)
-        {
-            SetState(state);
-        }
-    }
-
-    private void LogPlaybackTiming(string phase, DateTimeOffset? startedAt)
-    {
-        double? elapsed = startedAt is { } start
-            ? (DateTimeOffset.Now - start).TotalSeconds
-            : null;
-        Log.Information(
-            "播放阶段：{Phase}，距拉取流 {Elapsed}",
-            phase,
-            elapsed is { } seconds ? $"{seconds:F1} 秒" : "未知");
-    }
-
-    private WasapiOut EnsureAudioOutput()
+    private void EnsureAudioOutput()
     {
         if (_audioOutput is not null)
-        {
-            return _audioOutput;
-        }
-
-        var output = new WasapiOut(AudioClientShareMode.Shared, useEventSync: true, latency: 100);
-        output.Init(_audioBuffer);
-        _audioOutput = output;
-        return output;
-    }
-
-    private void OnAudioPlay(IntPtr samples, uint count)
-    {
-        var byteCount = checked((int)(count * Channels * (BitsPerSample / 8)));
-        if (byteCount == 0)
         {
             return;
         }
 
-        var managedSamples = ArrayPool<byte>.Shared.Rent(byteCount);
+        var output = new WasapiOut(AudioClientShareMode.Shared, useEventSync: true, latency: 100);
+        output.Init(_volumeProvider);
+        _audioOutput = output;
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _lifecycle.Wait();
         try
         {
-            Marshal.Copy(samples, managedSamples, 0, byteCount);
-            _audioBuffer.AddSamples(managedSamples, 0, byteCount);
-            _spectrumAnalyzer.PushPcm16Stereo(managedSamples, byteCount);
-        }
-        catch (Exception exception)
-        {
-            Log.Error(exception, "写入 LibVLC PCM 音频回调失败");
+            if (_disposed)
+            {
+                return;
+            }
+
+            StopCoreAsync().GetAwaiter().GetResult();
+            _disposed = true;
+            _audioOutput?.Dispose();
+            _spectrumAnalyzer.Dispose();
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(managedSamples);
+            _lifecycle.Release();
+            _lifecycle.Dispose();
+        }
+    }
+}
+
+internal sealed class PlaybackProcessSession : IDisposable
+{
+    private const int RecentLogLimit = 8;
+    private readonly object _logSync = new();
+    private readonly Queue<string> _recentLog = new();
+    private readonly CancellationTokenSource _cancellation;
+    private readonly CancellationTokenRegistration _cancellationRegistration;
+    private int _disposed;
+
+    public PlaybackProcessSession(Process process, CancellationToken cancellationToken)
+    {
+        Process = process;
+        _cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _cancellationRegistration = _cancellation.Token.Register(TryKill);
+    }
+
+    public Process Process { get; }
+    public CancellationToken Token => _cancellation.Token;
+    public Task Completion { get; set; } = Task.CompletedTask;
+
+    public string RecentLog
+    {
+        get
+        {
+            lock (_logSync)
+            {
+                return string.Join(" | ", _recentLog);
+            }
         }
     }
 
-    private static void OnVlcLog(object? sender, LogEventArgs args)
+    public void AddLog(string line)
     {
-        var message = VlcLogSanitizer.Sanitize(args.Message);
-        switch (args.Level)
+        lock (_logSync)
         {
-            // LibVLC calls its informational level "Notice".
-            case LogLevel.Notice:
-                Log.Information("LibVLC [{Module}] {Message}", args.Module, message);
-                break;
-            case LogLevel.Warning:
-                Log.Warning("LibVLC [{Module}] {Message}", args.Module, message);
-                break;
-            case LogLevel.Error:
-                Log.Error("LibVLC [{Module}] {Message}", args.Module, message);
-                break;
+            _recentLog.Enqueue(line);
+            while (_recentLog.Count > RecentLogLimit)
+            {
+                _recentLog.Dequeue();
+            }
+        }
+    }
+
+    public void CancelAndKill()
+    {
+        _cancellation.Cancel();
+        TryKill();
+    }
+
+    private void TryKill()
+    {
+        try
+        {
+            if (!Process.HasExited)
+            {
+                Process.Kill(entireProcessTree: true);
+            }
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
         }
     }
 
     public void Dispose()
     {
-        _vlc.Log -= OnVlcLog;
-        _player.Playing -= OnPlaying;
-        _player.Buffering -= OnBuffering;
-        _player.ESSelected -= OnElementaryStreamSelected;
-        _player.TimeChanged -= OnTimeChanged;
-        _player.Dispose();
-        _vlc.Dispose();
-        _audioOutput?.Dispose();
-        _spectrumAnalyzer.Dispose();
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        _cancellationRegistration.Dispose();
+        _cancellation.Dispose();
+        Process.Dispose();
     }
 }
 
-internal sealed class PlaybackReadiness
+internal static class FfmpegProcess
 {
-    private bool _audioTrackSelected;
-    private bool _clockStarted;
-    private bool _playerStarted;
+    public const string ExecutableName = "ffmpeg-aac.exe";
+    private const int SampleRate = 48_000;
+    private const int Channels = 2;
 
-    public void Reset()
+    public static ProcessStartInfo CreateStartInfo(
+        string executablePath,
+        StreamDescriptor stream,
+        Uri? proxy = null)
     {
-        _audioTrackSelected = false;
-        _clockStarted = false;
-        _playerStarted = false;
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = executablePath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        string[] arguments =
+        [
+            "-hide_banner",
+            "-loglevel", "warning",
+            "-nostats",
+            "-nostdin",
+            "-user_agent", BiliHttp.DesktopBrowserUserAgent,
+            "-referer", $"https://live.bilibili.com/{stream.RoomId}",
+        ];
+
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        RemoveInheritedProxyEnvironment(startInfo);
+        if (proxy is not null)
+        {
+            startInfo.ArgumentList.Add("-http_proxy");
+            startInfo.ArgumentList.Add(proxy.AbsoluteUri);
+        }
+
+        string[] inputAndOutputArguments =
+        [
+            "-i", stream.Url.AbsoluteUri,
+            "-map", "0:a:0",
+            "-vn",
+            "-ac", Channels.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "-ar", SampleRate.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "-c:a", "pcm_s16le",
+            "-f", "s16le",
+            "pipe:1"
+        ];
+        foreach (var argument in inputAndOutputArguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        return startInfo;
     }
 
-    public PlaybackState? OnPlaying()
+    private static void RemoveInheritedProxyEnvironment(ProcessStartInfo startInfo)
     {
-        _playerStarted = true;
-        return ReadyState();
+        string[] proxyVariables =
+        [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+            "no_proxy"
+        ];
+        foreach (var variable in proxyVariables)
+        {
+            startInfo.Environment.Remove(variable);
+        }
     }
+}
 
-    public PlaybackState OnBuffering(float cache) => _clockStarted
-        ? PlaybackState.Playing
-        : PlaybackState.Buffering;
-
-    public PlaybackState? OnAudioTrackSelected()
+internal static class NetworkProxy
+{
+    public static Uri? Resolve(
+        Uri destination,
+        NetworkProxyMode mode,
+        string? manualProxyUrl)
     {
-        _audioTrackSelected = true;
-        return ReadyState();
-    }
-
-    public PlaybackState? OnTimeChanged(long time)
-    {
-        if (time < 0)
+        if (mode == NetworkProxyMode.Disabled)
         {
             return null;
         }
 
-        _clockStarted = true;
-        return ReadyState();
+        if (mode == NetworkProxyMode.Manual)
+        {
+            if (TryParseManual(manualProxyUrl, out var manualProxy))
+            {
+                return manualProxy;
+            }
+
+            Log.Warning("手动代理 URL 无效，本次播放使用直连");
+            return null;
+        }
+
+        return ResolveSystem(destination);
     }
 
-    private PlaybackState? ReadyState() => _playerStarted && _audioTrackSelected && _clockStarted
-        ? PlaybackState.Playing
-        : null;
+    public static bool TryParseManual(string? value, out Uri? proxy)
+    {
+        if (Uri.TryCreate(value?.Trim(), UriKind.Absolute, out var parsed)
+            && parsed.Scheme is "http" or "https"
+            && !string.IsNullOrEmpty(parsed.Host))
+        {
+            proxy = parsed;
+            return true;
+        }
+
+        proxy = null;
+        return false;
+    }
+
+    private static Uri? ResolveSystem(Uri destination)
+    {
+        try
+        {
+            var systemProxy = HttpClient.DefaultProxy;
+            if (systemProxy.IsBypassed(destination))
+            {
+                return null;
+            }
+
+            var proxy = systemProxy.GetProxy(destination);
+            if (proxy is null || proxy == destination)
+            {
+                return null;
+            }
+
+            if (proxy.Scheme is not ("http" or "https"))
+            {
+                Log.Warning("FFmpeg 不支持系统代理协议 {Scheme}，本次播放使用直连", proxy.Scheme);
+                return null;
+            }
+
+            return proxy;
+        }
+        catch (Exception exception)
+        {
+            Log.Warning(exception, "解析系统网络代理失败，本次播放使用直连");
+            return null;
+        }
+    }
 }
 
-internal static partial class VlcLogSanitizer
+internal static partial class FfmpegLogSanitizer
 {
     [GeneratedRegex(
         "(?i)(cookie|authorization)(?:\\s+header)?\\s*:?\\s*.*$",
@@ -355,30 +661,5 @@ internal static partial class VlcLogSanitizer
         sanitized = SignedUrlPattern().Replace(sanitized, "$1?<redacted>");
         sanitized = SignedRequestPathPattern().Replace(sanitized, "$1?<redacted>");
         return CredentialValuePattern().Replace(sanitized, "$1<redacted>");
-    }
-}
-
-internal static class VlcRequestOptions
-{
-    public static IReadOnlyList<string> Create(
-        StreamDescriptor stream)
-    {
-        var referrer = $"https://live.bilibili.com/{stream.RoomId}";
-        var options = new List<string>
-        {
-            $":http-user-agent={BiliHttp.DesktopBrowserUserAgent}",
-            $":http-referrer={referrer}",
-            ":http-forward-cookies",
-            ":network-caching=500"
-        };
-
-        if (stream.Protocol.Equals("http_hls", StringComparison.OrdinalIgnoreCase))
-        {
-            options.Add(":adaptive-livedelay=2000");
-            options.Add(":adaptive-maxbuffer=2000");
-            options.Add(":adaptive-lowlatency=1");
-        }
-
-        return options;
     }
 }

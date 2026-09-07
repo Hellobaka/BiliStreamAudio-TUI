@@ -46,7 +46,7 @@ public sealed class ProtocolTests
     }
 
     [Fact]
-    public void Vlc_media_options_include_http_playback_context()
+    public void Ffmpeg_arguments_include_http_context_and_pcm_output()
     {
         var stream = new StreamDescriptor(
             new Uri("https://cdn.example.test/live.m3u8"),
@@ -55,37 +55,74 @@ public sealed class ProtocolTests
             80,
             true,
             26044264);
-        var options = VlcRequestOptions.Create(stream);
+        var startInfo = FfmpegProcess.CreateStartInfo("ffmpeg-aac.exe", stream);
+        var arguments = startInfo.ArgumentList;
 
-        Assert.Contains(options, option => option.StartsWith(":http-user-agent=Mozilla/5.0", StringComparison.Ordinal));
-        Assert.Contains(":http-referrer=https://live.bilibili.com/26044264", options);
-        Assert.Contains(":http-forward-cookies", options);
-        Assert.Contains(":network-caching=500", options);
-        Assert.Contains(":adaptive-livedelay=2000", options);
-        Assert.Contains(":adaptive-maxbuffer=2000", options);
-        Assert.Contains(":adaptive-lowlatency=1", options);
+        Assert.Equal("ffmpeg-aac.exe", startInfo.FileName);
+        Assert.True(startInfo.RedirectStandardOutput);
+        Assert.True(startInfo.RedirectStandardError);
+        Assert.Contains(BiliHttp.DesktopBrowserUserAgent, arguments);
+        Assert.Contains("https://live.bilibili.com/26044264", arguments);
+        Assert.Contains("https://cdn.example.test/live.m3u8", arguments);
+        Assert.Contains("0:a:0", arguments);
+        Assert.Contains("pcm_s16le", arguments);
+        Assert.Contains("s16le", arguments);
+        Assert.Contains("pipe:1", arguments);
+        Assert.DoesNotContain("-http_proxy", arguments);
+        Assert.DoesNotContain("HTTP_PROXY", startInfo.Environment.Keys);
+        Assert.DoesNotContain("HTTPS_PROXY", startInfo.Environment.Keys);
     }
 
     [Fact]
-    public void Playback_readiness_waits_for_an_audio_track_and_running_clock()
+    public void Ffmpeg_arguments_include_an_explicit_manual_proxy()
     {
-        var readiness = new PlaybackReadiness();
+        var stream = new StreamDescriptor(
+            new Uri("https://cdn.example.test/live.flv"),
+            "http_stream",
+            "flv",
+            80,
+            false,
+            26044264);
 
-        Assert.Equal(PlaybackState.Buffering, readiness.OnBuffering(0));
-        Assert.Null(readiness.OnPlaying());
-        Assert.Null(readiness.OnAudioTrackSelected());
-        Assert.Equal(PlaybackState.Playing, readiness.OnTimeChanged(0));
-        Assert.Equal(PlaybackState.Playing, readiness.OnBuffering(0));
+        var startInfo = FfmpegProcess.CreateStartInfo(
+            "ffmpeg-aac.exe",
+            stream,
+            new Uri("http://127.0.0.1:7890"));
+        var proxyOptionIndex = startInfo.ArgumentList.IndexOf("-http_proxy");
+
+        Assert.True(proxyOptionIndex >= 0);
+        Assert.Equal("http://127.0.0.1:7890/", startInfo.ArgumentList[proxyOptionIndex + 1]);
+        Assert.True(proxyOptionIndex < startInfo.ArgumentList.IndexOf("-i"));
+    }
+
+    [Theory]
+    [InlineData("http://127.0.0.1:7890")]
+    [InlineData("https://proxy.example.test:443")]
+    public void Manual_proxy_accepts_http_urls(string value)
+    {
+        Assert.True(NetworkProxy.TryParseManual(value, out var proxy));
+        Assert.NotNull(proxy);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("127.0.0.1:7890")]
+    [InlineData("socks5://127.0.0.1:7890")]
+    [InlineData("not a url")]
+    public void Manual_proxy_rejects_unsupported_or_relative_urls(string value)
+    {
+        Assert.False(NetworkProxy.TryParseManual(value, out var proxy));
+        Assert.Null(proxy);
     }
 
     [Fact]
-    public void Vlc_log_sanitizer_removes_cookies_and_signed_queries()
+    public void Ffmpeg_log_sanitizer_removes_cookies_and_signed_queries()
     {
-        var cookieLog = VlcLogSanitizer.Sanitize(
+        var cookieLog = FfmpegLogSanitizer.Sanitize(
             "Sending Cookie SESSDATA=secret; bili_jct=csrf-secret");
-        var urlLog = VlcLogSanitizer.Sanitize(
+        var urlLog = FfmpegLogSanitizer.Sanitize(
             "GET https://cdn.example.test/live.m3u8?token=secret&expires=123 HTTP/1.1");
-        var relativeRequestLog = VlcLogSanitizer.Sanitize(
+        var relativeRequestLog = FfmpegLogSanitizer.Sanitize(
             "GET /live/audio.m3u8??token=secret&expires=123 HTTP/1.1");
 
         Assert.DoesNotContain("secret", cookieLog, StringComparison.Ordinal);

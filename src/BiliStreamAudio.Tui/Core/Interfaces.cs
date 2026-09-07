@@ -116,11 +116,16 @@ public interface IAudioPlayer : IDisposable
     {
         get;
     }
+    NetworkProxyMode NetworkProxyMode
+    {
+        get;
+    }
 
     Task PlayAsync(StreamDescriptor stream, CancellationToken cancellationToken);
     Task StopAsync();
     void SetVolume(int volume);
     void ToggleMute();
+    void SetNetworkProxy(NetworkProxyMode mode, string? manualProxyUrl = null);
 }
 
 /// <summary>

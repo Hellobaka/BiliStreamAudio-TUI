@@ -88,6 +88,7 @@ internal static class Program
         }
 
         audio.SetVolume(settings.Volume);
+        audio.SetNetworkProxy(settings.NetworkProxyMode, settings.ManualProxyUrl);
 
         using IApplication app = GuiApplication.Create();
         app.Init();

@@ -25,8 +25,9 @@ internal sealed class SettingsWindow : ApplicationWindow
 {
     protected override bool SuppressEscape => _isEditingStatusBar;
 
-    private static readonly string[] CategoryNames = ["账户", "通用配置", "状态栏设置", "关于"];
+    private static readonly string[] CategoryNames = ["账户", "通用配置", "网络代理", "状态栏设置", "关于"];
     private const int AboutBoxWidth = 48;
+    private const string BuildTimestamp = "__BILISTREAMAUDIO_BUILD_TIMESTAMP__";
 
     // Color palette (matching LiveRoomWindow aesthetic)
     private static readonly GuiColor BilibiliPink = new("#fb7299");
@@ -68,6 +69,9 @@ internal sealed class SettingsWindow : ApplicationWindow
     private GuiListView? _blockedWordsListView;
     private ObservableCollection<string> _blockedWordsSource = [];
     private GuiTextField? _spectrumBandCountInput;
+    private GuiTextField? _manualProxyInput;
+    private NetworkProxyMode _networkProxyMode;
+    private string _manualProxyUrl = string.Empty;
     private bool _isEditingStatusBar;
     private int _editingStatusBarRow;
     private List<StatusBarElement> _statusBarDraftFirstRow = [];
@@ -78,7 +82,8 @@ internal sealed class SettingsWindow : ApplicationWindow
     private GuiListView? _selectedStatusElements;
 
     public bool IsTextInputFocused => _blockedWordInput?.HasFocus == true
-                                     || _spectrumBandCountInput?.HasFocus == true;
+                                     || _spectrumBandCountInput?.HasFocus == true
+                                     || _manualProxyInput?.HasFocus == true;
 
     public SettingsWindow(
         IApplication app,
@@ -105,7 +110,7 @@ internal sealed class SettingsWindow : ApplicationWindow
 
         var categoryHeader = new GuiLabel
         {
-            Text = "设置分类  Alt+1-4",
+            Text = "设置分类  Alt+1-5",
             X = 1,
             Y = 1,
             Width = 17
@@ -157,9 +162,9 @@ internal sealed class SettingsWindow : ApplicationWindow
         {
             if (args.NewValue is { } index)
             {
-                if (_isEditingStatusBar && index != 2)
+                if (_isEditingStatusBar && index != 3)
                 {
-                    _categoryList.SetSelection(2, false);
+                    _categoryList.SetSelection(3, false);
                     return;
                 }
 
@@ -190,6 +195,7 @@ internal sealed class SettingsWindow : ApplicationWindow
                 var value when value == Key.D2.WithAlt => 1,
                 var value when value == Key.D3.WithAlt => 2,
                 var value when value == Key.D4.WithAlt => 3,
+                var value when value == Key.D5.WithAlt => 4,
                 _ => -1
             };
 
@@ -234,6 +240,11 @@ internal sealed class SettingsWindow : ApplicationWindow
             settings.SpectrumColorMode, out var mode) ? mode : SpectrumColorMode.Rainbow;
         _displayOptions.DanmakuBlockedList = [.. settings.DanmakuBlockedList];
         _displayOptions.SyncWordsFromBlockedList();
+        _networkProxyMode = Enum.IsDefined(settings.NetworkProxyMode)
+            ? settings.NetworkProxyMode
+            : NetworkProxyMode.Disabled;
+        _manualProxyUrl = settings.ManualProxyUrl?.Trim() ?? string.Empty;
+        _audio.SetNetworkProxy(_networkProxyMode, _manualProxyUrl);
     }
 
     private AppSettings BuildCurrentSettings()
@@ -241,6 +252,8 @@ internal sealed class SettingsWindow : ApplicationWindow
         return new AppSettings
         {
             Volume = _audio.Volume,
+            NetworkProxyMode = _networkProxyMode,
+            ManualProxyUrl = _manualProxyUrl,
             ShowDanmaku = _displayOptions.ShowDanmaku,
             ShowSuperChats = _displayOptions.ShowSuperChats,
             ShowGifts = _displayOptions.ShowGifts,
@@ -273,9 +286,12 @@ internal sealed class SettingsWindow : ApplicationWindow
                 BuildGeneralPanel();
                 break;
             case 2:
-                BuildStatusBarPanel();
+                BuildNetworkProxyPanel();
                 break;
             case 3:
+                BuildStatusBarPanel();
+                break;
+            case 4:
                 BuildAboutPanel();
                 break;
         }
@@ -285,7 +301,7 @@ internal sealed class SettingsWindow : ApplicationWindow
 
     private void SelectCategory(int index)
     {
-        if (_isEditingStatusBar && index != 2)
+        if (_isEditingStatusBar && index != 3)
         {
             return;
         }
@@ -634,6 +650,167 @@ internal sealed class SettingsWindow : ApplicationWindow
             deleteButton, moveUpButton, moveDownButton);
     }
 
+    #endregion
+
+    #region 网络代理
+
+    private void BuildNetworkProxyPanel()
+    {
+        var header = CreateSectionHeader("播放网络代理", 0);
+        var proxyEnabled = new GuiCheckBox
+        {
+            Text = "  启用代理",
+            X = 2,
+            Y = 2,
+            Width = Dim.Fill(3)
+        };
+        var autoProxy = new GuiCheckBox
+        {
+            Text = "  自动检测系统代理",
+            X = 4,
+            Y = 4,
+            Width = Dim.Fill(5),
+            RadioStyle = true
+        };
+        var manualProxy = new GuiCheckBox
+        {
+            Text = "  手动输入代理 URL",
+            X = 4,
+            Y = 6,
+            Width = Dim.Fill(5),
+            RadioStyle = true
+        };
+        var manualProxyLabel = new GuiLabel
+        {
+            Text = "代理 URL：",
+            X = 4,
+            Y = 8,
+            Width = 11
+        };
+        var manualProxyInput = _manualProxyInput = new GuiTextField
+        {
+            Text = _manualProxyUrl,
+            X = 15,
+            Y = 8,
+            Width = Dim.Fill(3)
+        };
+        var proxyHint = CreateInfoLabel(string.Empty, 10);
+        var updatingProxyControls = false;
+
+        void SyncProxyControls()
+        {
+            updatingProxyControls = true;
+            var enabled = _networkProxyMode != NetworkProxyMode.Disabled;
+            proxyEnabled.Value = enabled ? GuiCheckState.Checked : GuiCheckState.UnChecked;
+            autoProxy.Enabled = enabled;
+            manualProxy.Enabled = enabled;
+            autoProxy.Value = _networkProxyMode == NetworkProxyMode.AutoDetect
+                ? GuiCheckState.Checked
+                : GuiCheckState.UnChecked;
+            manualProxy.Value = _networkProxyMode == NetworkProxyMode.Manual
+                ? GuiCheckState.Checked
+                : GuiCheckState.UnChecked;
+            manualProxyLabel.Enabled = _networkProxyMode == NetworkProxyMode.Manual;
+            manualProxyInput.Enabled = _networkProxyMode == NetworkProxyMode.Manual;
+            proxyHint.Text = GetProxyHint(_networkProxyMode, _manualProxyUrl);
+            updatingProxyControls = false;
+        }
+
+        void SaveProxySettings()
+        {
+            _audio.SetNetworkProxy(_networkProxyMode, _manualProxyUrl);
+            PersistSettings();
+        }
+
+        proxyEnabled.ValueChanged += (_, args) =>
+        {
+            if (updatingProxyControls)
+            {
+                return;
+            }
+
+            _networkProxyMode = args.NewValue == GuiCheckState.Checked
+                ? NetworkProxyMode.AutoDetect
+                : NetworkProxyMode.Disabled;
+            SyncProxyControls();
+            SaveProxySettings();
+        };
+        autoProxy.ValueChanged += (_, args) =>
+        {
+            if (updatingProxyControls)
+            {
+                return;
+            }
+
+            if (args.NewValue != GuiCheckState.Checked)
+            {
+                SyncProxyControls();
+                return;
+            }
+
+            _networkProxyMode = NetworkProxyMode.AutoDetect;
+            SyncProxyControls();
+            SaveProxySettings();
+        };
+        manualProxy.ValueChanged += (_, args) =>
+        {
+            if (updatingProxyControls)
+            {
+                return;
+            }
+
+            if (args.NewValue != GuiCheckState.Checked)
+            {
+                SyncProxyControls();
+                return;
+            }
+
+            _networkProxyMode = NetworkProxyMode.Manual;
+            SyncProxyControls();
+            SaveProxySettings();
+        };
+        manualProxyInput.TextChanged += (_, _) =>
+        {
+            if (updatingProxyControls)
+            {
+                return;
+            }
+
+            _manualProxyUrl = manualProxyInput.Text.ToString()?.Trim() ?? string.Empty;
+            proxyHint.Text = GetProxyHint(_networkProxyMode, _manualProxyUrl);
+            SaveProxySettings();
+        };
+        SyncProxyControls();
+
+        ConfigurePanelNavigation(proxyEnabled);
+        ConfigurePanelNavigation(autoProxy);
+        ConfigurePanelNavigation(manualProxy);
+        ConfigurePanelNavigation(manualProxyInput);
+        _contentArea.Add(
+            header,
+            proxyEnabled,
+            autoProxy,
+            manualProxy,
+            manualProxyLabel,
+            manualProxyInput,
+            proxyHint);
+    }
+
+    private static string GetProxyHint(NetworkProxyMode mode, string manualProxyUrl) => mode switch
+    {
+        NetworkProxyMode.Disabled => "关闭时 FFmpeg 使用直连；更改在下次播放时生效。",
+        NetworkProxyMode.AutoDetect => "将自动检测当前直播地址所使用的系统代理。",
+        NetworkProxyMode.Manual when IsManualProxyUrlValid(manualProxyUrl) =>
+            "代理 URL 有效；更改在下次播放时生效。",
+        NetworkProxyMode.Manual => "请输入 http:// 或 https:// 开头的有效代理 URL。",
+        _ => string.Empty
+    };
+
+    private static bool IsManualProxyUrlValid(string value) =>
+        Uri.TryCreate(value.Trim(), UriKind.Absolute, out var proxy)
+        && proxy.Scheme is "http" or "https"
+        && !string.IsNullOrEmpty(proxy.Host);
+
     private GuiCheckBox CreateToggle(string text, bool value, Action<bool> update, int y)
     {
         var toggle = new GuiCheckBox
@@ -834,7 +1011,7 @@ internal sealed class SettingsWindow : ApplicationWindow
         _editingStatusBarRow = 0;
         _isEditingStatusBar = true;
         _setStatusBarEditing(true);
-        SwitchCategory(2);
+        SwitchCategory(3);
     }
 
     private void BuildStatusBarEditor()
@@ -958,7 +1135,7 @@ internal sealed class SettingsWindow : ApplicationWindow
     private void SelectStatusBarEditingRow(int row)
     {
         _editingStatusBarRow = row;
-        SwitchCategory(2);
+        SwitchCategory(3);
     }
 
     private List<StatusBarElement> GetEditingStatusBarRow() =>
@@ -975,7 +1152,7 @@ internal sealed class SettingsWindow : ApplicationWindow
         }
 
         GetEditingStatusBarRow().Add(available[index]);
-        SwitchCategory(2);
+        SwitchCategory(3);
     }
 
     private void RemoveSelectedStatusElement()
@@ -988,7 +1165,7 @@ internal sealed class SettingsWindow : ApplicationWindow
         }
 
         row.RemoveAt(index);
-        SwitchCategory(2);
+        SwitchCategory(3);
     }
 
     private void MoveSelectedStatusElement(int offset)
@@ -1002,7 +1179,7 @@ internal sealed class SettingsWindow : ApplicationWindow
         }
 
         (row[index], row[target]) = (row[target], row[index]);
-        SwitchCategory(2);
+        SwitchCategory(3);
     }
 
     private void SaveStatusBarDraft()
@@ -1034,7 +1211,7 @@ internal sealed class SettingsWindow : ApplicationWindow
     {
         _isEditingStatusBar = false;
         _setStatusBarEditing(false);
-        SwitchCategory(2);
+        SwitchCategory(3);
     }
 
     private static string FormatStatusBarRow(IReadOnlyList<StatusBarElement> row) =>
@@ -1048,9 +1225,9 @@ internal sealed class SettingsWindow : ApplicationWindow
     {
         var assembly = Assembly.GetEntryAssembly() ?? Assembly.GetExecutingAssembly();
         var version = assembly.GetName().Version?.ToString() ?? "未知";
-        var buildDate = File.Exists(assembly.Location)
-            ? File.GetCreationTime(assembly.Location).ToString("yyyy-MM-dd HH:mm")
-            : "未知";
+        var buildDate = BuildTimestamp.StartsWith("__BILISTREAMAUDIO_", StringComparison.Ordinal)
+            ? "开发构建"
+            : BuildTimestamp;
 
         var topBorder = new GuiLabel
         {
@@ -1086,7 +1263,7 @@ internal sealed class SettingsWindow : ApplicationWindow
         };
         var buildDateLabel = new GuiLabel
         {
-            Text = $"构建日期：{buildDate}",
+            Text = $"构建时间：{buildDate}",
             X = 2,
             Y = 6,
             Width = Dim.Fill(3)
@@ -1114,7 +1291,7 @@ internal sealed class SettingsWindow : ApplicationWindow
         string[] libraries =
         [
             "  • Terminal.Gui — 终端 UI 框架",
-            "  • LibVLCSharp / VideoLAN.LibVLC — 音频播放",
+            "  • FFmpeg — 直播流解码",
             "  • NAudio — Windows 音频输出",
             "  • Microsoft.Web.WebView2 — 登录窗口",
             "  • Serilog — 日志框架",

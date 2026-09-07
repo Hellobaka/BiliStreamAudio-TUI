@@ -19,37 +19,38 @@ public sealed class StreamResolverTests
     }
 
     [Fact]
-    public async Task Video_fallback_prefers_flv_before_hls_and_reports_actual_stream_type()
+    public async Task Video_fallback_prefers_flv_and_keeps_hls_as_fallback()
     {
         using var http = new BiliHttp(handler: new StreamResponseHandler(VideoStreams), useRawCookieHeader: false);
         var resolver = new StreamResolver(http);
 
         var streams = await resolver.ResolveAudioAsync(Room, true, CancellationToken.None);
 
-        Assert.NotEmpty(streams);
+        Assert.Equal(3, streams.Count);
         var stream = streams[0];
         Assert.Equal("http_stream", stream.Protocol);
         Assert.Equal("flv", stream.Format);
         Assert.False(stream.IsAudioOnly);
         Assert.Equal("avc", stream.Codec);
+        Assert.Equal("fmp4", streams[1].Format);
+        Assert.Equal("ts", streams[2].Format);
     }
 
     [Fact]
-    public async Task Lower_quality_wins_over_flv_format()
+    public async Task Flv_preference_wins_over_a_lower_quality_hls_stream()
     {
         using var http = new BiliHttp(handler: new StreamResponseHandler(QualityBeatsFormat), useRawCookieHeader: false);
         var resolver = new StreamResolver(http);
 
         var streams = await resolver.ResolveAudioAsync(Room, true, CancellationToken.None);
 
-        // 2 Mbps 的 TS 流实测远快于 8 Mbps 的 FLV 流，因此最低画质优先于 FLV 格式。
         Assert.Equal(2, streams.Count);
-        Assert.Equal("http_hls", streams[0].Protocol);
-        Assert.Equal("ts", streams[0].Format);
-        Assert.Equal(80, streams[0].Quality);
-        Assert.Equal("http_stream", streams[1].Protocol);
-        Assert.Equal("flv", streams[1].Format);
-        Assert.Equal(250, streams[1].Quality);
+        Assert.Equal("http_stream", streams[0].Protocol);
+        Assert.Equal("flv", streams[0].Format);
+        Assert.Equal(250, streams[0].Quality);
+        Assert.Equal("http_hls", streams[1].Protocol);
+        Assert.Equal("ts", streams[1].Format);
+        Assert.Equal(80, streams[1].Quality);
     }
 
     [Fact]
@@ -106,8 +107,8 @@ public sealed class StreamResolverTests
 
     private const string BitrateStreams = """
         {"code":0,"data":{"playurl_info":{"playurl":{"stream":[
-          {"protocol_name":"http_stream","format":[
-            {"format_name":"flv","codec":[{"codec_name":"avc","current_qn":80,"media_info":{"realtime_avg_bw":256000},"base_url":"/live.flv","url_info":[{"host":"https://cdn.example.test","extra":"?media_type=0"}]}]}
+          {"protocol_name":"http_hls","format":[
+            {"format_name":"fmp4","codec":[{"codec_name":"avc","current_qn":80,"media_info":{"realtime_avg_bw":256000},"base_url":"/live.m3u8","url_info":[{"host":"https://cdn.example.test","extra":"?media_type=0"}]}]}
           ]}
         ]}}}}
         """;
@@ -125,10 +126,10 @@ public sealed class StreamResolverTests
 
     private const string QualityOverCodec = """
         {"code":0,"data":{"playurl_info":{"playurl":{"stream":[
-          {"protocol_name":"http_stream","format":[
-            {"format_name":"flv","codec":[
-              {"codec_name":"hevc","current_qn":80,"base_url":"/low.flv","url_info":[{"host":"https://cdn.example.test","extra":"?media_type=0"}]},
-              {"codec_name":"avc","current_qn":250,"base_url":"/high.flv","url_info":[{"host":"https://cdn.example.test","extra":"?media_type=0"}]}
+          {"protocol_name":"http_hls","format":[
+            {"format_name":"fmp4","codec":[
+              {"codec_name":"hevc","current_qn":80,"base_url":"/low.m3u8","url_info":[{"host":"https://cdn.example.test","extra":"?media_type=0"}]},
+              {"codec_name":"avc","current_qn":250,"base_url":"/high.m3u8","url_info":[{"host":"https://cdn.example.test","extra":"?media_type=0"}]}
             ]}
           ]}
         ]}}}}
