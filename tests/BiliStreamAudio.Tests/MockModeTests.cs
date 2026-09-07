@@ -112,6 +112,28 @@ public sealed class MockModeTests
     }
 
     [Fact]
+    public async Task Refreshing_a_room_session_reports_reconnection_and_restores_playback()
+    {
+        var audio = new MockAudioPlayer();
+        var danmaku = new MockDanmakuConnection();
+        var statuses = new List<string>();
+
+        await using var session = new RoomSession(
+            new MockRoomResolver(),
+            new MockStreamResolver(),
+            audio,
+            danmaku);
+        session.StatusChanged += (_, status) => statuses.Add(status);
+
+        await session.SwitchAsync(1000, CancellationToken.None);
+        await session.RefreshAsync(CancellationToken.None);
+
+        Assert.Equal(1000, session.Room?.RoomId);
+        Assert.Equal(PlaybackState.Playing, audio.State);
+        Assert.Contains("正在刷新直播间：停止当前音频流与弹幕连接…", statuses);
+    }
+
+    [Fact]
     public async Task Mock_danmaku_is_generated_only_while_connected()
     {
         await using var connection = new MockDanmakuConnection(

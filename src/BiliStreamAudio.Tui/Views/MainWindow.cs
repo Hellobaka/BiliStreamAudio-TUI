@@ -141,9 +141,13 @@ internal sealed class MainWindow : ApplicationWindow
 
     public bool IsTextInputFocused => LiveRoom.IsInputFocused || Browse.IsSearchInputFocused || Settings.IsTextInputFocused;
 
+    public bool IsLiveRoomActive => ReferenceEquals(_tabs.Value, LiveRoom);
+
     public void SelectPreviousTab() => SelectTab(-1);
 
     public void SelectNextTab() => SelectTab(1);
+
+    public void RefreshLiveRoom() => LiveRoom.RefreshLiveRoom();
 
     private void ShowLiveRoom() => _tabs.Value = LiveRoom;
 

@@ -79,6 +79,7 @@ public sealed class RoomSession : IAsyncDisposable
     {
         if (Room is { } room)
         {
+            StatusChanged?.Invoke(this, "正在刷新直播间：停止当前音频流与弹幕连接…");
             await SwitchAsync(room.RoomId, cancellationToken).ConfigureAwait(false);
         }
     }

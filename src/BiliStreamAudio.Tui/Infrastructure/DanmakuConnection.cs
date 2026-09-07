@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using System.Text.Json;
 using BiliStreamAudio.Tui.Core;
+using Serilog;
 
 namespace BiliStreamAudio.Tui.Infrastructure;
 
@@ -25,6 +26,8 @@ public sealed class DanmakuConnection(
     public async Task ConnectAsync(LiveRoom room, CancellationToken cancellationToken)
     {
         await DisconnectAsync().ConfigureAwait(false);
+        StatusChanged?.Invoke(this, "正在获取弹幕服务器…");
+        Log.Information("正在获取房间 {RoomId} 的弹幕服务器", room.RoomId);
         var authSession = sessionProvider();
         using var http = _httpFactory(authSession);
         var (imageKey, subKey) = await GetWbiKeysAsync(http, cancellationToken)
@@ -45,6 +48,8 @@ public sealed class DanmakuConnection(
         }
 
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        StatusChanged?.Invoke(this, "正在连接弹幕服务器…");
+        Log.Information("正在连接房间 {RoomId} 的弹幕服务器", room.RoomId);
         _receiveTask = RunReconnectLoopAsync(
             room.RoomId,
             servers,
@@ -76,6 +81,7 @@ public sealed class DanmakuConnection(
                     .ConfigureAwait(false);
 
                 StatusChanged?.Invoke(this, "弹幕已连接");
+                Log.Information("房间 {RoomId} 的弹幕已连接", roomId);
 
                 using var heartbeat = new PeriodicTimer(TimeSpan.FromSeconds(30));
                 using var connectionLifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -97,6 +103,7 @@ public sealed class DanmakuConnection(
             catch (Exception)
             {
                 StatusChanged?.Invoke(this, "弹幕连接断开，正在重连");
+                Log.Warning("房间 {RoomId} 的弹幕连接断开，正在重连", roomId);
             }
             finally
             {

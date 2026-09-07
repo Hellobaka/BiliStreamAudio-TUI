@@ -231,6 +231,22 @@ internal sealed class LiveRoomWindow : ApplicationWindow
 
     public void FocusInput() => _input.SetFocus();
 
+    public void RefreshLiveRoom()
+    {
+        if (_session.Room is not { } room)
+        {
+            AddMessage("无法刷新：当前未打开直播间。");
+            return;
+        }
+
+        AddMessage($"正在刷新直播间 {room.RoomId}：重建音频流和弹幕连接…");
+        Log.Information("用户请求刷新房间 {RoomId}", room.RoomId);
+        _ = RunUiTask(
+            () => _session.RefreshAsync(CancellationToken.None),
+            exception => AddMessage($"刷新失败：{exception}"),
+            () => AddMessage("音频流已重新解析，正在连接弹幕服务器…"));
+    }
+
     public void RefreshDisplay()
     {
         _messageDataSource.Refresh();
@@ -456,9 +472,7 @@ internal sealed class LiveRoomWindow : ApplicationWindow
             }
             else if (key == Key.R || key == Key.R.WithShift)
             {
-                _ = RunUiTask(
-                    () => _session.RefreshAsync(CancellationToken.None),
-                    AddMessage);
+                RefreshLiveRoom();
                 key.Handled = true;
             }
             else if (key == Key.M || key == Key.M.WithShift)

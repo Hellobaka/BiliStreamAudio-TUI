@@ -123,6 +123,13 @@ internal static class Program
             {
                 return;
             }
+            // This must be handled at the application level. A focused child view can otherwise
+            // consume the key before the live-room window sees it.
+            else if (mainWindow.IsLiveRoomActive && (key == Key.R || key == Key.R.WithShift))
+            {
+                mainWindow.RefreshLiveRoom();
+                key.Handled = true;
+            }
             else if (key == Key.Q || key == Key.Q.WithShift)
             {
                 mainWindow.SelectPreviousTab();
