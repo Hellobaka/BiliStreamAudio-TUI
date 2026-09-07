@@ -64,6 +64,8 @@ public sealed class ProtocolTests
         Assert.Contains(BiliHttp.DesktopBrowserUserAgent, arguments);
         Assert.Contains("https://live.bilibili.com/26044264", arguments);
         Assert.Contains("https://cdn.example.test/live.m3u8", arguments);
+        Assert.Contains("15000000", arguments);
+        Assert.Contains("32768", arguments);
         Assert.Contains("0:a:0", arguments);
         Assert.Contains("pcm_s16le", arguments);
         Assert.Contains("s16le", arguments);
@@ -71,6 +73,10 @@ public sealed class ProtocolTests
         Assert.DoesNotContain("-http_proxy", arguments);
         Assert.DoesNotContain("HTTP_PROXY", startInfo.Environment.Keys);
         Assert.DoesNotContain("HTTPS_PROXY", startInfo.Environment.Keys);
+
+        Assert.True(arguments.IndexOf("-rw_timeout") < arguments.IndexOf("-i"));
+        Assert.True(arguments.IndexOf("-reconnect") < arguments.IndexOf("-i"));
+        Assert.True(arguments.IndexOf("-probesize") < arguments.IndexOf("-i"));
     }
 
     [Fact]

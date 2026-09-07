@@ -15,13 +15,17 @@ public sealed class AudioPlayer : IAudioPlayer, IAudioSpectrumSource
     private const int SampleRate = 48_000;
     private const int Channels = 2;
     private const int BitsPerSample = 16;
+    private const int BytesPerSecond = SampleRate * Channels * (BitsPerSample / 8);
+    private const int PlaybackBufferMilliseconds = 3_000;
+    private const int PrebufferMilliseconds = 1_000;
+    private const int PrebufferBytes = BytesPerSecond * PrebufferMilliseconds / 1_000;
 
     private readonly object _sync = new();
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private readonly string _ffmpegPath;
     private readonly BufferedWaveProvider _audioBuffer = new(new WaveFormat(SampleRate, BitsPerSample, Channels))
     {
-        BufferDuration = TimeSpan.FromMilliseconds(500),
+        BufferDuration = TimeSpan.FromMilliseconds(PlaybackBufferMilliseconds),
         DiscardOnBufferOverflow = true,
         ReadFully = true
     };
@@ -140,9 +144,10 @@ public sealed class AudioPlayer : IAudioPlayer, IAudioSpectrumSource
 
                 _audioBuffer.ClearBuffer();
                 _spectrumAnalyzer.Start();
-                _audioOutput!.Play();
                 SetState(PlaybackState.Buffering);
-                Log.Information("播放阶段：FFmpeg 已启动，等待首个 PCM 音频帧");
+                Log.Information(
+                    "播放阶段：FFmpeg 已启动，等待 {PrebufferMilliseconds} ms PCM 音频缓冲",
+                    PrebufferMilliseconds);
                 session.Completion = MonitorPlaybackAsync(session);
             }
             catch
@@ -310,13 +315,37 @@ public sealed class AudioPlayer : IAudioPlayer, IAudioSpectrumSource
                     (DateTimeOffset.Now - startedAt).TotalSeconds);
                 if (IsCurrentSession(session))
                 {
-                    SetState(PlaybackState.Playing);
+                    Log.Information("播放阶段：收到首个 PCM 音频帧，开始填充播放缓冲");
                 }
             }
 
             _audioBuffer.AddSamples(buffer, 0, read);
             _spectrumAnalyzer.PushPcm16Stereo(buffer, read);
+            StartAudioOutputWhenBuffered(session);
         }
+    }
+
+    private void StartAudioOutputWhenBuffered(PlaybackProcessSession session)
+    {
+        if (_audioBuffer.BufferedBytes < PrebufferBytes)
+        {
+            return;
+        }
+
+        lock (_sync)
+        {
+            if (!ReferenceEquals(_session, session) || !session.TryMarkAudioOutputStarted())
+            {
+                return;
+            }
+
+            _audioOutput!.Play();
+        }
+
+        Log.Information(
+            "播放阶段：PCM 缓冲已达到 {PrebufferMilliseconds} ms，启动音频输出",
+            PrebufferMilliseconds);
+        SetState(PlaybackState.Playing);
     }
 
     private static async Task PumpLogAsync(PlaybackProcessSession session)
@@ -409,6 +438,7 @@ internal sealed class PlaybackProcessSession : IDisposable
     private readonly Queue<string> _recentLog = new();
     private readonly CancellationTokenSource _cancellation;
     private readonly CancellationTokenRegistration _cancellationRegistration;
+    private int _audioOutputStarted;
     private int _disposed;
 
     public PlaybackProcessSession(Process process, CancellationToken cancellationToken)
@@ -450,6 +480,9 @@ internal sealed class PlaybackProcessSession : IDisposable
         _cancellation.Cancel();
         TryKill();
     }
+
+    public bool TryMarkAudioOutputStarted() =>
+        Interlocked.CompareExchange(ref _audioOutputStarted, 1, 0) == 0;
 
     private void TryKill()
     {
@@ -524,6 +557,12 @@ internal static class FfmpegProcess
 
         string[] inputAndOutputArguments =
         [
+            "-rw_timeout", "15000000",
+            "-reconnect", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "3",
+            "-probesize", "32768",
+            "-analyzeduration", "0",
             "-i", stream.Url.AbsoluteUri,
             "-map", "0:a:0",
             "-vn",
