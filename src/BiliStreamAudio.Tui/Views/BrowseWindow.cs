@@ -15,8 +15,8 @@ namespace BiliStreamAudio.Tui.Views;
 
 internal sealed class BrowseWindow : ApplicationWindow
 {
+    private readonly FollowedLiveWindow _followed;
     private readonly SearchLiveWindow _search;
-    private readonly Tabs _tabs;
 
     public BrowseWindow(
         IApplication app,
@@ -26,29 +26,55 @@ internal sealed class BrowseWindow : ApplicationWindow
         Action showLiveRoom)
     {
         Title = "浏览";
-        _tabs = new Tabs
+        var sectionHeadingScheme = new Scheme(new GuiAttribute(GuiColor.White, GuiColor.None, TextStyle.Bold));
+        var followedHeading = new GuiLabel
+        {
+            Text = "关注直播（r 刷新）",
+            X = 1,
+            Y = 0,
+            Width = Dim.Fill(2),
+            HotKeySpecifier = new Rune(0xffff)
+        };
+        followedHeading.SetScheme(sectionHeadingScheme);
+        _followed = new FollowedLiveWindow(app, directory, session, showLiveRoom)
         {
             X = 0,
-            Y = 0,
+            Y = 1,
+            Width = Dim.Fill(),
+            Height = Dim.Percent(40)
+        };
+        var searchHeading = new GuiLabel
+        {
+            Text = "搜索主播（Enter 搜索）",
+            X = 1,
+            Y = Pos.Bottom(_followed),
+            Width = Dim.Fill(2),
+            HotKeySpecifier = new Rune(0xffff)
+        };
+        searchHeading.SetScheme(sectionHeadingScheme);
+        _search = new SearchLiveWindow(app, directory, rooms, session, showLiveRoom)
+        {
+            X = 0,
+            Y = Pos.Bottom(searchHeading),
             Width = Dim.Fill(),
             Height = Dim.Fill()
         };
-        _search = new SearchLiveWindow(app, directory, rooms, session, showLiveRoom);
-        _tabs.Add(new FollowedLiveWindow(app, directory, session, showLiveRoom), _search);
-        _tabs.ValueChanged += (_, _) => ShortcutHintChanged?.Invoke();
-        Add(_tabs);
+        Add(followedHeading, _followed, searchHeading, _search);
     }
 
     public bool IsSearchInputFocused => _search.IsQueryFocused;
 
-    public string ShortcutHint => ReferenceEquals(_tabs.Value, _search)
-        ? "搜索：Enter 搜索/播放"
-        : "关注：r 刷新 · Enter 播放";
+    public string ShortcutHint => "Tab 搜索 · ↓ 进入结果 · r 刷新 · Enter 搜索/播放";
 
-    public event Action? ShortcutHintChanged;
+    public void Refresh() => _followed.Load();
+
+    public void FocusSearch() => _search.FocusQuery();
+
+    public bool FocusFirstFollowedEntry() => ReferenceEquals(MostFocused, this)
+        && _followed.FocusFirstEntry();
 }
 
-internal abstract class LiveListWindow : ApplicationWindow
+internal abstract class LiveListWindow : GuiView
 {
     private static readonly string[] LoadingFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     protected readonly IApplication _app;
@@ -56,6 +82,7 @@ internal abstract class LiveListWindow : ApplicationWindow
     private readonly Action _showLiveRoom;
     private readonly GuiView _cards;
     private readonly GuiLabel _message;
+    private readonly List<GuiButton> _playButtons = [];
     private readonly bool _showDeleteButton;
     private readonly string _dateColumnHeader;
     private CancellationTokenSource? _loadingAnimation;
@@ -71,8 +98,17 @@ internal abstract class LiveListWindow : ApplicationWindow
         Action showLiveRoom,
         bool showHeader = false,
         bool showDeleteButton = false,
-        string dateColumnHeader = "开播时间")
+        string dateColumnHeader = "开播时间",
+        int messageY = 2)
     {
+        CanFocus = true;
+        KeyDown += (_, key) =>
+        {
+            if (key == Key.Esc)
+            {
+                key.Handled = true;
+            }
+        };
         _app = app;
         _session = session;
         _showLiveRoom = showLiveRoom;
@@ -86,16 +122,17 @@ internal abstract class LiveListWindow : ApplicationWindow
         _message = new GuiLabel
         {
             X = 1,
-            Y = 2,
+            Y = messageY,
             Width = Dim.Fill(2),
             HotKeySpecifier = new Rune(0xffff)
         };
         _cards = new GuiView
         {
             X = 0,
-            Y = 3,
+            Y = messageY + 1,
             Width = Dim.Fill(),
-            Height = Dim.Fill(3)
+            Height = Dim.Fill(messageY + 1),
+            CanFocus = true
         };
         Add(_message, _cards);
     }
@@ -157,6 +194,7 @@ internal abstract class LiveListWindow : ApplicationWindow
     {
         StopLoadingAnimation();
         _cards.RemoveAll();
+        _playButtons.Clear();
         _message.Text = entries.Count == 0
             ? emptyMessage
             : resultMessage ?? $"共 {entries.Count} 个结果";
@@ -172,6 +210,7 @@ internal abstract class LiveListWindow : ApplicationWindow
     {
         StopLoadingAnimation();
         _cards.RemoveAll();
+        _playButtons.Clear();
         _message.Text = $"加载失败：{error}";
         SetNeedsDraw();
     }
@@ -183,7 +222,8 @@ internal abstract class LiveListWindow : ApplicationWindow
             X = 1,
             Y = y,
             Width = Dim.Fill(2),
-            Height = 1
+            Height = 1,
+            CanFocus = true
         };
         var status = entry.IsLive ? "正在直播" : "未开播";
         var name = new GuiLabel
@@ -225,6 +265,7 @@ internal abstract class LiveListWindow : ApplicationWindow
             Enabled = (entry.IsLive || entry.IsDirectRoomEntry) && entry.RoomId > 0
         };
         play.Accepted += (_, _) => Play(entry);
+        _playButtons.Add(play);
         if (_showDeleteButton)
         {
             var delete = new GuiButton
@@ -278,12 +319,19 @@ internal abstract class LiveListWindow : ApplicationWindow
 
     protected void Invoke(Action action) => _app.Invoke(action);
 
+    protected bool FocusFirstPlayableCard()
+    {
+        var firstPlayable = _playButtons.FirstOrDefault(button => button.Enabled);
+        return firstPlayable?.SetFocus() ?? false;
+    }
+
     protected void ShowLoading(
         string text,
         IReadOnlyList<LiveDirectoryEntry>? retainedEntries = null)
     {
         StopLoadingAnimation();
         _cards.RemoveAll();
+        _playButtons.Clear();
         if (retainedEntries is not null)
         {
             for (var index = 0; index < retainedEntries.Count; index++)
@@ -331,32 +379,53 @@ internal abstract class LiveListWindow : ApplicationWindow
 internal sealed class FollowedLiveWindow : LiveListWindow
 {
     private readonly ILiveDirectoryService _directory;
+    private int _loadVersion;
 
     public FollowedLiveWindow(
         IApplication app,
         ILiveDirectoryService directory,
         RoomSession session,
         Action showLiveRoom)
-        : base(app, session, showLiveRoom)
+        : base(app, session, showLiveRoom, messageY: 0)
     {
         Title = "关注的人";
         _directory = directory;
         KeyDown += (_, key) =>
         {
-            if (key == Key.R || key == Key.R.WithShift)
+            if (key == Key.CursorDown
+                && ReferenceEquals(MostFocused, this)
+                && FocusFirstPlayableCard())
             {
-                Load();
                 key.Handled = true;
             }
         };
         Load();
     }
 
-    private void Load() => _ = RunUiTaskAsync(async () =>
+    public void Load()
     {
-        var entries = await _directory.GetFollowedLiveAsync(CancellationToken.None).ConfigureAwait(false);
-        Invoke(() => ShowEntries(entries, "当前没有关注的主播正在直播。"));
-    }, ShowError);
+        var loadVersion = Interlocked.Increment(ref _loadVersion);
+        ShowLoading("正在刷新");
+        _ = RunUiTaskAsync(async () =>
+        {
+            var entries = await _directory.GetFollowedLiveAsync(CancellationToken.None).ConfigureAwait(false);
+            Invoke(() =>
+            {
+                if (loadVersion == Volatile.Read(ref _loadVersion))
+                {
+                    ShowEntries(entries, "当前没有关注的主播正在直播。");
+                }
+            });
+        }, error =>
+        {
+            if (loadVersion == Volatile.Read(ref _loadVersion))
+            {
+                ShowError(error);
+            }
+        });
+    }
+
+    public bool FocusFirstEntry() => FocusFirstPlayableCard();
 }
 
 internal sealed class SearchLiveWindow : LiveListWindow
@@ -366,6 +435,8 @@ internal sealed class SearchLiveWindow : LiveListWindow
     private readonly TextField _query;
 
     public bool IsQueryFocused => _query.HasFocus;
+
+    public void FocusQuery() => _query.SetFocus();
 
     public SearchLiveWindow(
         IApplication app,
@@ -399,6 +470,10 @@ internal sealed class SearchLiveWindow : LiveListWindow
                 Search();
                 key.Handled = true;
             }
+            else if (key == Key.CursorDown && FocusFirstPlayableCard())
+            {
+                key.Handled = true;
+            }
         };
         search.Accepted += (_, _) => Search();
         Add(_query, search);
@@ -426,7 +501,7 @@ internal sealed class SearchLiveWindow : LiveListWindow
                 null,
                 true)
             : null;
-        ShowLoading("搜索中", directEntry is null ? null : [directEntry]);
+        ShowLoading("正在搜索", directEntry is null ? null : [directEntry]);
         _ = RunUiTaskAsync(async () =>
         {
             var entries = await _directory.SearchUsersAsync(query, CancellationToken.None).ConfigureAwait(false);
@@ -436,7 +511,11 @@ internal sealed class SearchLiveWindow : LiveListWindow
                 : new[] { directEntry }
                     .Concat(enrichedEntries.Where(entry => entry.RoomId != directRoomId))
                     .ToArray();
-            Invoke(() => ShowEntries(allEntries, "没有找到匹配的主播。"));
+            Invoke(() =>
+            {
+                ShowEntries(allEntries, "没有找到匹配的主播。");
+                FocusFirstPlayableCard();
+            });
         }, ShowError);
     }
 

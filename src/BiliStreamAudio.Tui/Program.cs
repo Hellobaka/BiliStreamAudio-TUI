@@ -123,11 +123,27 @@ internal static class Program
             {
                 return;
             }
+            else if (mainWindow.IsBrowseActive && key == Key.Tab)
+            {
+                mainWindow.FocusBrowseSearch();
+                key.Handled = true;
+            }
+            else if (mainWindow.IsBrowseActive
+                     && key == Key.CursorDown
+                     && mainWindow.FocusFirstBrowseEntry())
+            {
+                key.Handled = true;
+            }
             // This must be handled at the application level. A focused child view can otherwise
             // consume the key before the live-room window sees it.
             else if (mainWindow.IsLiveRoomActive && (key == Key.R || key == Key.R.WithShift))
             {
                 mainWindow.RefreshLiveRoom();
+                key.Handled = true;
+            }
+            else if (mainWindow.IsBrowseActive && (key == Key.R || key == Key.R.WithShift))
+            {
+                mainWindow.RefreshBrowse();
                 key.Handled = true;
             }
             else if (key == Key.Q || key == Key.Q.WithShift)

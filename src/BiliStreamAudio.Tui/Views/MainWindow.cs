@@ -99,7 +99,6 @@ internal sealed class MainWindow : ApplicationWindow
             Browse,
             _playbackHistory,
             Settings);
-        Browse.ShortcutHintChanged += RefreshStatusBar;
         _tabs.ValueChanged += (_, args) =>
         {
             if (ReferenceEquals(args.NewValue, _playbackHistory))
@@ -143,11 +142,19 @@ internal sealed class MainWindow : ApplicationWindow
 
     public bool IsLiveRoomActive => ReferenceEquals(_tabs.Value, LiveRoom);
 
+    public bool IsBrowseActive => ReferenceEquals(_tabs.Value, Browse);
+
     public void SelectPreviousTab() => SelectTab(-1);
 
     public void SelectNextTab() => SelectTab(1);
 
     public void RefreshLiveRoom() => LiveRoom.RefreshLiveRoom();
+
+    public void RefreshBrowse() => Browse.Refresh();
+
+    public void FocusBrowseSearch() => Browse.FocusSearch();
+
+    public bool FocusFirstBrowseEntry() => Browse.FocusFirstFollowedEntry();
 
     private void ShowLiveRoom() => _tabs.Value = LiveRoom;
 
